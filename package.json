@@ -1,0 +1,30 @@
+{
+  "name": "vivo-faturas",
+  "version": "1.0.0",
+  "description": "Automacao de download, analise e upload de faturas/boletos do portal Vivo Empresas (MVE)",
+  "main": "index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "headed": "node index.js --headed",
+    "dry-run": "node index.js --no-upload --no-ia",
+    "login": "node index.js --only-login --headed",
+    "google:token": "node scripts/gerar-token-google.js",
+    "postinstall": "playwright install chromium"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "cli-progress": "^3.12.0",
+    "dotenv": "^16.4.5",
+    "googleapis": "^144.0.0",
+    "openai": "^4.73.0",
+    "p-retry": "^4.6.2",
+    "pdf-parse": "^1.1.1",
+    "playwright": "^1.49.0",
+    "winston": "^3.17.0",
+    "winston-daily-rotate-file": "^5.0.0"
+  }
+}
