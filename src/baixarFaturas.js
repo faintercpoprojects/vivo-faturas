@@ -268,15 +268,91 @@ async function selecionarProduto(page, alvo) {
 }
 
 /**
- * Baixa todas as contas VISÍVEIS do produto atual (Fatura + Boleto por conta).
- * @returns {Promise<{faturas:number, boletos:number}>}
+ * Lê o status de cada conta (fatura) visível, alinhado com a ordem dos botões
+ * "Baixar fatura". O status fica em `span.invoice-due-date-label-<estado>`:
+ *   -in-arrears = Atrasada | -due = A vencer | -paid/-settled = Paga.
+ * Detecção conservadora: só marca `paga` quando há sinal claro de pagamento —
+ * qualquer outro/desconhecido é tratado como pendente (baixa).
+ * @returns {Promise<Array<{paga:boolean, status:string}>>}
+ */
+async function statusDasContas(page) {
+  return page.evaluate(() => {
+    function* deep(root){for(const el of root.querySelectorAll('*')){yield el; if(el.shadowRoot) yield* deep(el.shadowRoot);}}
+    const vis = el => !!(el.offsetParent || el.getClientRects().length);
+
+    // 1) coleta os marcadores de status de cada fatura (badges) com posição Y.
+    //    badge success = paga | badge warning ("Pronta pra pagar") = pendente |
+    //    badge danger = atrasada/vencida. Também aceita invoice-due-date-label.
+    const marcadores = [];
+    for (const el of deep(document)) {
+      if (!vis(el)) continue;
+      const cls = (el.className || '').toString();
+      const ehBadge = /\bbadge\b/.test(cls) && !/badge__icon/.test(cls);
+      const ehLabel = /invoice-due-date-label/i.test(cls);
+      if (!ehBadge && !ehLabel) continue;
+
+      const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!txt || txt.length > 32) continue; // ignora badges numéricos / blocos grandes
+
+      const temPalavraStatus = /pag|vencer|vencid|atrasad|aberto|pronta|contestad|autorizad|processand|liquidad/i.test(txt);
+      const temClasseStatus = /success|warning|danger|paid|arrears|-due\b/i.test(cls);
+      if (!temPalavraStatus && !temClasseStatus) continue;
+
+      // "pagar"/"pronta pra pagar" NÃO é paga; "paga"/"pago"/"...paga" é.
+      const paga = /\bsuccess\b|paid|settled|liquidad/i.test(cls) ||
+                   /\bpag[oa]\b/i.test(txt) ||
+                   /pagamento\s+(confirmad|efetuad|realizad)/i.test(txt);
+
+      let status;
+      if (paga) status = 'Paga';
+      else if (/danger|arrears|atrasad|vencid/i.test(cls + ' ' + txt)) status = 'Atrasada';
+      else if (/warning|pronta|a vencer|-due|aberto|pendente/i.test(cls + ' ' + txt)) status = 'Pendente';
+      else status = txt.slice(0, 25) || 'desconhecido';
+
+      marcadores.push({ y: el.getBoundingClientRect().top, paga, status });
+    }
+
+    // 2) pareia cada botão "Baixar fatura" com o marcador mais próximo em Y.
+    const botoesY = [...deep(document)]
+      .filter(el => el.tagName.toLowerCase() === 'button' && /^baixar fatura$/i.test((el.textContent || '').replace(/\s+/g, ' ').trim()) && vis(el))
+      .map(el => el.getBoundingClientRect().top);
+
+    return botoesY.map((by) => {
+      let best = null, bestDist = Infinity;
+      for (const m of marcadores) {
+        const d = Math.abs(m.y - by);
+        if (d < bestDist) { bestDist = d; best = m; }
+      }
+      // Só considera pago se o marcador PAGO estiver claramente no card do botão.
+      // Caso contrário (longe/ausente/desconhecido) => trata como pendente (baixa).
+      if (!best || bestDist > 220) return { paga: false, status: 'desconhecido' };
+      return { paga: best.paga, status: best.status };
+    });
+  });
+}
+
+/**
+ * Baixa as contas VISÍVEIS do produto atual (Fatura + Boleto por conta),
+ * PULANDO faturas com status "Paga". Só baixa as pendentes.
+ * @returns {Promise<{faturas:number, boletos:number, pagasIgnoradas:number}>}
  */
 async function baixarContasDoProduto(page, contrato, contas, rotulo, onDocumento) {
   const hoje = new Date();
   let faturas = 0;
   let boletos = 0;
+  let pagasIgnoradas = 0;
+
+  const status = await statusDasContas(page);
 
   for (let i = 0; i < contas; i++) {
+    const st = status[i];
+    if (st && st.paga) {
+      pagasIgnoradas++;
+      logger.info(`  • ${rotulo} conta ${i}: fatura PAGA — ignorada.`);
+      continue;
+    }
+    logger.debug(`${contrato.cnpjFormatado} [${rotulo}] conta ${i}: status ${st ? st.status : 'n/d'}`);
+
     const docs = [
       { regex: DOC_FATURA, tipo: 'Fatura' },
       { regex: DOC_BOLETO, tipo: 'Boleto' },
@@ -352,7 +428,7 @@ async function baixarContasDoProduto(page, contrato, contas, rotulo, onDocumento
     }
   }
 
-  return { faturas, boletos };
+  return { faturas, boletos, pagasIgnoradas };
 }
 
 /**
@@ -372,6 +448,7 @@ async function processarEmpresa(page, contrato, onDocumento) {
   let faturas = 0;
   let boletos = 0;
   let totalContas = 0;
+  let pagasIgnoradas = 0;
 
   for (const produto of PRODUTOS) {
     // Seleciona o produto (Móvel já é o padrão; Fixo exige a troca).
@@ -392,12 +469,13 @@ async function processarEmpresa(page, contrato, onDocumento) {
     const r = await baixarContasDoProduto(page, contrato, contas, produto.rotulo, onDocumento);
     faturas += r.faturas;
     boletos += r.boletos;
+    pagasIgnoradas += r.pagasIgnoradas;
   }
 
   // limpa staging vazio
   await fsp.rmdir(path.join(config.paths.downloads, '_tmp')).catch(() => {});
 
-  return { contas: totalContas, faturas, boletos, semFatura: totalContas === 0 };
+  return { contas: totalContas, faturas, boletos, pagasIgnoradas, semFatura: totalContas === 0 };
 }
 
 module.exports = {

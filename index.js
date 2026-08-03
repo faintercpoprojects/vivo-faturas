@@ -51,6 +51,7 @@ const stats = {
   contratosComErro: 0,
   faturasEncontradas: 0,
   faturasBaixadas: 0,
+  faturasPagasIgnoradas: 0,
   boletosBaixados: 0,
   boletosAusentes: 0,
   jsonsGerados: 0,
@@ -173,8 +174,11 @@ async function processarContrato(page, contrato, manifest, barra) {
     await finalizarDocumento(doc, contrato, manifest);
   });
 
+  stats.faturasPagasIgnoradas += resumo.pagasIgnoradas || 0;
+
   logger.info(
-    `----- ${contrato.cnpjFormatado}: ${resumo.faturas} fatura(s), ${resumo.boletos} boleto(s) em ${formatarDuracao(Date.now() - inicio)} -----`
+    `----- ${contrato.cnpjFormatado}: ${resumo.faturas} fatura(s), ${resumo.boletos} boleto(s)` +
+      `${resumo.pagasIgnoradas ? `, ${resumo.pagasIgnoradas} paga(s) ignorada(s)` : ''} em ${formatarDuracao(Date.now() - inicio)} -----`
   );
   return resumo;
 }
@@ -291,6 +295,7 @@ function relatorioFinal() {
   logger.info(`  Contratos com erro ..... ${stats.contratosComErro}`);
   logger.info(`  Faturas encontradas .... ${stats.faturasEncontradas}`);
   logger.info(`  Faturas baixadas ....... ${stats.faturasBaixadas}`);
+  logger.info(`  Faturas pagas (ignor.) . ${stats.faturasPagasIgnoradas}`);
   logger.info(`  Boletos baixados ....... ${stats.boletosBaixados}`);
   logger.info(`  Boletos indisponíveis .. ${stats.boletosAusentes}`);
   logger.info(`  JSONs gerados .......... ${stats.jsonsGerados}`);
