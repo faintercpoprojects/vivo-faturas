@@ -3,9 +3,11 @@
 const path = require('path');
 const fs = require('fs');
 
-require('dotenv').config();
-
 const ROOT = path.resolve(__dirname, '..');
+
+// Carrega o .env por caminho ABSOLUTO (raiz do projeto), para funcionar
+// mesmo quando executado por outro diretório (ex.: Agendador de Tarefas).
+require('dotenv').config({ path: path.join(ROOT, '.env') });
 
 function bool(v, def = false) {
   if (v === undefined || v === null || v === '') return def;

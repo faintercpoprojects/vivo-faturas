@@ -73,9 +73,9 @@ async function contarContas(page, { esperaMax = 18000 } = {}) {
  *
  * @returns {Promise<{ok:boolean, suggested?:string, motivo?:string}>}
  */
-async function capturarDownload(page, acaoClicar, destino) {
+async function capturarDownload(page, acaoClicar, destino, timeoutMs) {
   const context = page.context();
-  const timeout = config.browser.downloadTimeout;
+  const timeout = timeoutMs || config.browser.downloadTimeout;
   await ensureDir(path.dirname(destino));
 
   const dl = page.waitForEvent('download', { timeout }).catch(() => null);
@@ -148,28 +148,51 @@ function metaDoNome(suggested, fallback = {}) {
   return meta;
 }
 
-/** Abre o menu da conta #indice e clica no link do documento, capturando o PDF. */
+/**
+ * Abre o menu da conta #indice e clica no link do documento, capturando o PDF.
+ * Re-tenta quando o portal não dispara o download (geração lenta do PDF é
+ * intermitente); NÃO re-tenta quando o documento simplesmente não existe no menu.
+ */
 async function baixarDocumentoDaConta(page, indice, regexDoc, destino) {
-  // (re)abre o menu do n-ésimo "Baixar fatura"
-  const abriu = await shadow.clicar(page, BTN_BAIXAR, { nth: indice, tags: ['button'] });
-  if (!abriu) return { ok: false, motivo: `botão "Baixar fatura" #${indice} não encontrado` };
-  await sleep(1800);
+  const tentativas = Math.max(2, config.run.maxRetries);
+  // Timeout por tentativa menor que o global, para caber várias tentativas.
+  const timeoutTentativa = Math.min(config.browser.downloadTimeout, 60000);
+  let ultimoMotivo = 'sem tentativa';
 
-  // o documento está disponível?
-  if (!(await shadow.existe(page, regexDoc, { tags: ['a', 'button'] }))) {
+  for (let t = 1; t <= tentativas; t++) {
+    // (re)abre o menu do n-ésimo "Baixar fatura"
+    const abriu = await shadow.clicar(page, BTN_BAIXAR, { nth: indice, tags: ['button'] });
+    if (!abriu) {
+      ultimoMotivo = `botão "Baixar fatura" #${indice} não encontrado`;
+      await sleep(1000);
+      continue;
+    }
+    await sleep(1800);
+
+    // o documento está disponível? (ausência é definitiva — não re-tenta)
+    if (!(await shadow.existe(page, regexDoc, { tags: ['a', 'button'] }))) {
+      await page.keyboard.press('Escape').catch(() => {});
+      return { ok: false, ausente: true, motivo: 'documento não disponível no menu' };
+    }
+
+    const r = await capturarDownload(
+      page,
+      () => shadow.clicar(page, regexDoc, { nth: 0, tags: ['a', 'button'] }),
+      destino,
+      timeoutTentativa
+    );
+
     await page.keyboard.press('Escape').catch(() => {});
-    return { ok: false, ausente: true, motivo: 'documento não disponível no menu' };
+    await sleep(800);
+
+    if (r.ok) return r;
+    ultimoMotivo = r.motivo;
+    if (t < tentativas) {
+      logger.debug(`Download não veio (tentativa ${t}/${tentativas}: ${r.motivo}); reabrindo menu...`);
+      await esperarEstabilizar(page, { timeout: 6000 });
+    }
   }
-
-  const r = await capturarDownload(
-    page,
-    () => shadow.clicar(page, regexDoc, { nth: 0, tags: ['a', 'button'] }),
-    destino
-  );
-
-  await page.keyboard.press('Escape').catch(() => {});
-  await sleep(800);
-  return r;
+  return { ok: false, motivo: ultimoMotivo };
 }
 
 /** Valida que o arquivo é um PDF real. */
@@ -198,28 +221,57 @@ function caminhoDestino({ cnpjFormatado, ano, mes, arquivo }) {
   );
 }
 
+// Produtos conferidos por empresa. A página /sec/invoices mostra um produto
+// por vez, controlado por um seletor (li.context-menu-item). Trocar o produto
+// recarrega a lista de contas/faturas.
+const PRODUTOS = [
+  { key: 'Movel', rotulo: 'Vivo Móvel', re: '^vivo m[oó]vel$' },
+  { key: 'Fixo', rotulo: 'Vivo Fixo', re: '^vivo fixo$' },
+];
+
+/** Lê o produto atualmente ativo no seletor (Movel|Fixo|null). */
+async function produtoAtivo(page) {
+  return page.evaluate(() => {
+    function* deep(root){for(const el of root.querySelectorAll('*')){yield el; if(el.shadowRoot) yield* deep(el.shadowRoot);}}
+    for (const el of deep(document)) {
+      const cls = (el.className || '').toString();
+      if (/context-menu-item\b/.test(cls) && /\bactive\b/.test(cls)) {
+        const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (/vivo fixo/i.test(t)) return 'Fixo';
+        if (/vivo m[oó]vel/i.test(t)) return 'Movel';
+      }
+    }
+    return null;
+  });
+}
+
 /**
- * Processa TODAS as contas da empresa ativa na página de faturas.
- * Para cada conta baixa a Fatura (Conta detalhada e nota fiscal) e o Boleto
- * (quando existir), organiza em CNPJ/ANO/MES e chama `onDocumento` para cada
- * arquivo baixado (para IA + upload + manifest a cargo do chamador).
- *
- * @param {import('playwright').Page} page
- * @param {import('./selecionarCNPJ').Contrato} contrato
- * @param {(doc:{tipo:string, produto:string, ano:number, mes:number, linha:string,
- *           arquivo:string, competencia:{ano:number,mes:number}}) => Promise<void>} onDocumento
- * @returns {Promise<{contas:number, faturas:number, boletos:number, semFatura:boolean}>}
+ * Troca o seletor de produto para `alvo` ('Movel'|'Fixo').
+ * @returns {Promise<boolean>} true se o produto ficou ativo, false se indisponível.
  */
-async function processarEmpresa(page, contrato, onDocumento) {
-  await abrirAreaFaturas(page);
-  const contas = await contarContas(page);
+async function selecionarProduto(page, alvo) {
+  if ((await produtoAtivo(page)) === alvo) return true;
 
-  if (contas === 0) {
-    logger.info(`${contrato.cnpjFormatado}: nenhuma fatura emitida no momento — pulando.`);
-    return { contas: 0, faturas: 0, boletos: 0, semFatura: true };
+  const alvoDef = PRODUTOS.find((p) => p.key === alvo);
+  // Abre o menu clicando no produto atualmente ativo (tenta ambos os rótulos).
+  for (const p of PRODUTOS) {
+    if (await shadow.clicar(page, p.re, { tags: ['li', 'button', 'a'] })) break;
   }
+  await sleep(1200);
 
-  logger.info(`${contrato.cnpjFormatado}: ${contas} conta(s) com fatura disponível.`);
+  const ok = await shadow.clicar(page, alvoDef.re, { tags: ['li', 'button', 'a'] });
+  await esperarEstabilizar(page, { timeout: 12000 });
+  await sleep(1500);
+
+  // Confirma pela marca "active" (se o produto existir para a empresa).
+  return (await produtoAtivo(page)) === alvo || Boolean(ok);
+}
+
+/**
+ * Baixa todas as contas VISÍVEIS do produto atual (Fatura + Boleto por conta).
+ * @returns {Promise<{faturas:number, boletos:number}>}
+ */
+async function baixarContasDoProduto(page, contrato, contas, rotulo, onDocumento) {
   const hoje = new Date();
   let faturas = 0;
   let boletos = 0;
@@ -300,16 +352,60 @@ async function processarEmpresa(page, contrato, onDocumento) {
     }
   }
 
+  return { faturas, boletos };
+}
+
+/**
+ * Processa a empresa ativa conferindo AMBOS os produtos (Vivo Móvel e Vivo Fixo).
+ * Para cada produto: seleciona no seletor, e para cada conta baixa Fatura e
+ * Boleto (quando existir). "Sem botão Baixar fatura" = produto sem fatura
+ * emitida no momento -> pula. Chama `onDocumento` para cada PDF baixado.
+ *
+ * @param {import('playwright').Page} page
+ * @param {import('./selecionarCNPJ').Contrato} contrato
+ * @param {(doc:object) => Promise<void>} onDocumento
+ * @returns {Promise<{contas:number, faturas:number, boletos:number, semFatura:boolean}>}
+ */
+async function processarEmpresa(page, contrato, onDocumento) {
+  await abrirAreaFaturas(page);
+
+  let faturas = 0;
+  let boletos = 0;
+  let totalContas = 0;
+
+  for (const produto of PRODUTOS) {
+    // Seleciona o produto (Móvel já é o padrão; Fixo exige a troca).
+    const disponivel = await selecionarProduto(page, produto.key);
+    if (!disponivel) {
+      logger.debug(`${contrato.cnpjFormatado}: seletor "${produto.rotulo}" indisponível — pulando produto.`);
+      continue;
+    }
+
+    const contas = await contarContas(page);
+    if (contas === 0) {
+      logger.info(`${contrato.cnpjFormatado} [${produto.rotulo}]: sem fatura emitida — pulando.`);
+      continue;
+    }
+
+    logger.info(`${contrato.cnpjFormatado} [${produto.rotulo}]: ${contas} conta(s) com fatura.`);
+    totalContas += contas;
+    const r = await baixarContasDoProduto(page, contrato, contas, produto.rotulo, onDocumento);
+    faturas += r.faturas;
+    boletos += r.boletos;
+  }
+
   // limpa staging vazio
   await fsp.rmdir(path.join(config.paths.downloads, '_tmp')).catch(() => {});
 
-  return { contas, faturas, boletos, semFatura: false };
+  return { contas: totalContas, faturas, boletos, semFatura: totalContas === 0 };
 }
 
 module.exports = {
   abrirAreaFaturas,
   contarContas,
   processarEmpresa,
+  selecionarProduto,
+  produtoAtivo,
   capturarDownload,
   metaDoNome,
   caminhoDestino,

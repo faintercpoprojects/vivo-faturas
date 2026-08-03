@@ -102,22 +102,24 @@ async function finalizarDocumento(doc, contrato, manifest) {
     documento: doc.tipo, // 'Fatura' | 'Boleto'
   };
 
-  const arquivos = [doc.arquivo];
+  // Arquivos que existem localmente (para limpeza). O JSON fica só local.
+  const arquivosLocais = [doc.arquivo];
 
-  // 1) IA -> JSON ao lado do PDF
+  // 1) IA -> JSON ao lado do PDF (gerado sempre, mas NÃO enviado ao Drive)
   try {
     const { arquivoJson } = await analisarPDF(doc.arquivo, contexto);
-    arquivos.push(arquivoJson);
+    arquivosLocais.push(arquivoJson);
     stats.jsonsGerados++;
   } catch (err) {
     registrarErro('analise-pdf', err, { arquivo: path.basename(doc.arquivo) });
   }
 
-  // 2) Upload
+  // 2) Upload — SOMENTE o PDF vai para o Drive
+  const paraUpload = [doc.arquivo];
   let enviados = 0;
   let uploadOk = true;
   try {
-    const resultados = await uploadLote(arquivos, {
+    const resultados = await uploadLote(paraUpload, {
       empresa: contrato.empresa,
       cnpjFormatado: contrato.cnpjFormatado,
       ano: doc.ano,
@@ -127,15 +129,15 @@ async function finalizarDocumento(doc, contrato, manifest) {
       if (r.status === 'enviado' || r.status === 'atualizado') { stats.uploads++; enviados++; }
       else if (r.status === 'ja-existia') { stats.uploadsJaExistiam++; enviados++; }
     }
-    if (config.drive.enabled && enviados < arquivos.length) uploadOk = false;
+    if (config.drive.enabled && enviados < paraUpload.length) uploadOk = false;
   } catch (err) {
     uploadOk = false;
     registrarErro('upload-drive', err, { arquivo: path.basename(doc.arquivo) });
   }
 
-  // 3) Limpeza — só depois do upload confirmado
+  // 3) Limpeza — só depois do upload confirmado (remove PDF e JSON locais)
   if (config.drive.enabled && uploadOk && config.run.limparAposUpload) {
-    for (const arquivo of arquivos) {
+    for (const arquivo of arquivosLocais) {
       await fsp.unlink(arquivo).catch(() => {});
       stats.arquivosRemovidos++;
     }
