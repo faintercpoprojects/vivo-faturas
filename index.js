@@ -26,6 +26,8 @@ const { abrirNavegador, login, garantirSessao, salvarSessao } = require('./src/l
 const { listarContratos, filtrarContratos, selecionarContrato } = require('./src/selecionarCNPJ');
 const { processarEmpresa } = require('./src/baixarFaturas');
 const { analisarPDF } = require('./src/analisarPDF');
+const { extrairCamposFatura } = require('./src/extrairCampos');
+const db = require('./src/db');
 const { dumpDashboard } = require('./src/diagnostico');
 const { uploadLote, verificarConexao } = require('./src/uploadDrive');
 const {
@@ -59,8 +61,13 @@ const stats = {
   uploadsJaExistiam: 0,
   arquivosRemovidos: 0,
   puladosPorManifest: 0,
+  contasNovas: 0,
+  contasAtualizadas: 0,
   erros: [],
 };
+
+// Registros de cada documento baixado (para conciliação de contas a pagar).
+const contasColetadas = [];
 
 function registrarErro(escopo, err, extras = {}) {
   const registro = {
@@ -84,6 +91,21 @@ function registrarErro(escopo, err, extras = {}) {
  * marcação no manifest. Chamado pelo processarEmpresa para cada PDF.
  */
 async function finalizarDocumento(doc, contrato, manifest) {
+  // Registro para o manifesto de conciliação (contas a pagar).
+  contasColetadas.push({
+    empresa: contrato.empresa,
+    cnpj: contrato.cnpjFormatado,
+    produto: doc.produto,
+    tipo: doc.tipo,
+    linha: doc.linha || '',
+    competencia: `${pad2(doc.mes)}/${doc.ano}`,
+    ano: doc.ano,
+    mes: doc.mes,
+    statusPortal: doc.statusPortal || 'desconhecido',
+    pagaPortal: Boolean(doc.pagaPortal),
+    arquivo: doc.arquivo,
+  });
+
   const chave = Manifest.chave({
     cnpj: contrato.cnpj,
     tipo: doc.produto,
@@ -106,19 +128,23 @@ async function finalizarDocumento(doc, contrato, manifest) {
   // Arquivos que existem localmente (para limpeza). O JSON fica só local.
   const arquivosLocais = [doc.arquivo];
 
-  // 1) IA -> JSON ao lado do PDF (gerado sempre, mas NÃO enviado ao Drive)
-  try {
-    const { arquivoJson } = await analisarPDF(doc.arquivo, contexto);
-    arquivosLocais.push(arquivoJson);
-    stats.jsonsGerados++;
-  } catch (err) {
-    registrarErro('analise-pdf', err, { arquivo: path.basename(doc.arquivo) });
+  // 1) IA -> JSON ao lado do PDF (gerado sempre, mas NÃO enviado ao Drive).
+  //    Pulado no modo verificação (--sem-json): só o PDF interessa.
+  if (!config.run.semJson) {
+    try {
+      const { arquivoJson } = await analisarPDF(doc.arquivo, contexto);
+      arquivosLocais.push(arquivoJson);
+      stats.jsonsGerados++;
+    } catch (err) {
+      registrarErro('analise-pdf', err, { arquivo: path.basename(doc.arquivo) });
+    }
   }
 
   // 2) Upload — SOMENTE o PDF vai para o Drive
   const paraUpload = [doc.arquivo];
   let enviados = 0;
   let uploadOk = true;
+  let driveFileId = null;
   try {
     const resultados = await uploadLote(paraUpload, {
       empresa: contrato.empresa,
@@ -127,6 +153,7 @@ async function finalizarDocumento(doc, contrato, manifest) {
       mes: doc.mes,
     });
     for (const r of resultados) {
+      if (r.arquivo === doc.arquivo && r.id) driveFileId = r.id;
       if (r.status === 'enviado' || r.status === 'atualizado') { stats.uploads++; enviados++; }
       else if (r.status === 'ja-existia') { stats.uploadsJaExistiam++; enviados++; }
     }
@@ -134,6 +161,51 @@ async function finalizarDocumento(doc, contrato, manifest) {
   } catch (err) {
     uploadOk = false;
     registrarErro('upload-drive', err, { arquivo: path.basename(doc.arquivo) });
+  }
+
+  // 2.5) Persistência no banco (SQLite) — antes da limpeza (o PDF ainda existe).
+  if (config.run.persistir) {
+    try {
+      const driveLink = driveFileId ? `https://drive.google.com/file/d/${driveFileId}/view` : null;
+      const base = {
+        cnpj: contrato.cnpjFormatado,
+        empresa: contrato.empresa,
+        produto: doc.produto,
+        linha: doc.linha || '',
+        competencia: `${pad2(doc.mes)}/${doc.ano}`,
+        ano: doc.ano,
+        mes: doc.mes,
+        pdfPath: doc.arquivo,
+        driveFileId,
+        driveLink,
+      };
+      if (doc.produto === 'Fixo') {
+        // Vivo Fixo: conta criada a partir do boleto + dados do card.
+        const r = db.registrarContaFixo({
+          cnpj: contrato.cnpjFormatado,
+          empresa: contrato.empresa,
+          linha: doc.linha || '',
+          competencia: `${pad2(doc.mes)}/${doc.ano}`,
+          ano: doc.ano,
+          mes: doc.mes,
+          numeroDocumento: doc.numeroDocumento || null,
+          dataVencimento: doc.dataVencimento || null,
+          valor: doc.valor != null ? doc.valor : null,
+          statusPortal: doc.statusPortal,
+          boletoPdfPath: doc.arquivo,
+          boletoDriveLink: driveLink,
+        });
+        if (r.nova) stats.contasNovas++; else stats.contasAtualizadas++;
+      } else if (doc.tipo === 'Fatura') {
+        const campos = await extrairCamposFatura(doc.arquivo).catch(() => ({}));
+        const r = db.registrarFatura({ ...base, ...campos, statusPortal: doc.statusPortal });
+        if (r.nova) stats.contasNovas++; else stats.contasAtualizadas++;
+      } else {
+        db.registrarBoleto(base);
+      }
+    } catch (err) {
+      registrarErro('persistencia-db', err, { arquivo: path.basename(doc.arquivo) });
+    }
   }
 
   // 3) Limpeza — só depois do upload confirmado (remove PDF e JSON locais)
@@ -201,7 +273,21 @@ async function main() {
   const manifest = await new Manifest().carregar();
 
   if (config.drive.enabled) {
-    await verificarConexao();
+    // Falha no Drive (ex.: refresh token expirado) NÃO aborta o run: seguimos
+    // baixando e gravando no banco (dashboard continua atualizado). O upload
+    // fica desativado até renovar o token (npm run google:token).
+    try {
+      await verificarConexao();
+    } catch (err) {
+      config.drive.enabled = false;
+      stats.driveIndisponivel = true;
+      registrarErro('drive-indisponivel', err, {});
+      logger.warn(
+        'Google Drive indisponível (token expirado/revogado?) — seguindo SEM upload. ' +
+          'Os PDFs ficam locais e o banco é atualizado. Renove com `npm run google:token` ' +
+          'e, para evitar recorrência, publique o app OAuth em "Production" (Google Cloud Console).'
+      );
+    }
   }
 
   const { browser, context, page } = await abrirNavegador();
@@ -302,12 +388,42 @@ function relatorioFinal() {
   logger.info(`  Uploads (novos) ........ ${stats.uploads}`);
   logger.info(`  Uploads já existentes .. ${stats.uploadsJaExistiam}`);
   logger.info(`  Pulados (já feitos) .... ${stats.puladosPorManifest}`);
+  logger.info(`  Contas novas (banco) ... ${stats.contasNovas}`);
+  logger.info(`  Contas atualizadas ..... ${stats.contasAtualizadas}`);
   logger.info(`  Arquivos removidos ..... ${stats.arquivosRemovidos}`);
   logger.info(`  Erros registrados ...... ${stats.erros.length}`);
   logger.info('='.repeat(70));
 
   const arquivo = salvarRelatorio(resumo);
   logger.info(`Relatório detalhado: ${arquivo}`);
+
+  // Manifesto de conciliação: uma linha por documento baixado, com status.
+  try {
+    const fs = require('fs');
+    const manifestoContas = path.join(config.paths.logs, 'contas-manifest.json');
+    fs.writeFileSync(manifestoContas, JSON.stringify(contasColetadas, null, 2), 'utf8');
+    logger.info(`Manifesto de contas: ${manifestoContas} (${contasColetadas.length} documento(s))`);
+  } catch (err) {
+    logger.warn(`Falha ao gravar manifesto de contas: ${err.message}`);
+  }
+
+  // Registra a execução no banco e encerra a conexão.
+  if (config.run.persistir) {
+    try {
+      db.registrarExecucao({
+        inicio: new Date(stats.inicio).toISOString(),
+        contasNovas: stats.contasNovas,
+        contasAtualizadas: stats.contasAtualizadas,
+        faturas: stats.faturasBaixadas,
+        boletos: stats.boletosBaixados,
+        erros: stats.erros.length,
+        status: stats.erros.length ? 'com-erros' : 'ok',
+      });
+      db.fechar();
+    } catch (err) {
+      logger.warn(`Falha ao registrar execução no banco: ${err.message}`);
+    }
+  }
 }
 
 main()

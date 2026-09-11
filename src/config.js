@@ -58,6 +58,13 @@ const cli = {
   inspecionar: hasFlag('--inspecionar'),
   cnpj: flagValue('--cnpj'),
   meses: flagValue('--meses'),
+  // Modo verificação: baixar localmente para conferir contra o Drive
+  dir: flagValue('--dir'),
+  incluirPagas: hasFlag('--incluir-pagas'),
+  semBoleto: hasFlag('--sem-boleto'),
+  semJson: hasFlag('--sem-json'),
+  todosCnpj: hasFlag('--todos-cnpj'), // ignora CNPJ_SOMENTE: processa TODAS as empresas
+  noDb: hasFlag('--no-db'), // desativa a persistência em SQLite
 };
 
 const config = {
@@ -82,8 +89,9 @@ const config = {
 
   cnpj: {
     ignorar: new Set(list(process.env.CNPJ_IGNORAR).map(onlyDigits)),
+    // --todos-cnpj ignora o filtro CNPJ_SOMENTE e processa TODAS as empresas.
     somente: new Set(
-      list(cli.cnpj || process.env.CNPJ_SOMENTE).map(onlyDigits)
+      cli.todosCnpj ? [] : list(cli.cnpj || process.env.CNPJ_SOMENTE).map(onlyDigits)
     ),
   },
 
@@ -108,10 +116,16 @@ const config = {
     reuseSession: cli.freshSession ? false : bool(process.env.REUSE_SESSION, true),
     limparAposUpload: cli.noCleanup ? false : bool(process.env.LIMPAR_APOS_UPLOAD, true),
     onlyLogin: cli.onlyLogin,
+    // Modo verificação (flags): baixar tudo localmente, sem enviar ao Drive.
+    incluirPagas: cli.incluirPagas, // baixa também as faturas já pagas
+    semBoleto: cli.semBoleto, // só a fatura, sem o boleto
+    semJson: cli.semJson, // não gera o .json (só o PDF)
+    persistir: !cli.noDb, // grava cada conta no banco SQLite (padrão: sim)
   },
 
   paths: {
-    downloads: abs(process.env.DOWNLOAD_DIR, './downloads'),
+    // --dir sobrescreve o destino (ex.: pasta na Área de Trabalho p/ conferência)
+    downloads: abs(cli.dir || process.env.DOWNLOAD_DIR, './downloads'),
     logs: abs(process.env.LOG_DIR, './logs'),
     storageState: abs(process.env.STORAGE_STATE, './.auth/state.json'),
     screenshots: abs('./logs/screenshots'),

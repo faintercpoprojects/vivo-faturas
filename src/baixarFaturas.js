@@ -16,13 +16,17 @@ const {
   onlyDigits,
 } = require('./utils');
 const shadow = require('./shadow');
+const { isoData, numero } = require('./extrairCampos');
 
 const INVOICES = 'https://mve.vivo.com.br/sec/invoices';
 
-// Rótulos reais dos itens do menu "Baixar fatura" no MVE.
+// Rótulos reais dos itens do menu "Baixar fatura" no MVE (Vivo Móvel).
 const DOC_FATURA = 'Conta detalhada e nota fiscal';
 const DOC_BOLETO = 'Boleto \\(\\.pdf\\)';
 const BTN_BAIXAR = '^\\s*baixar fatura\\s*$';
+// Vivo Fixo usa outro mecanismo: botão "Baixar agora" -> item "Boleto (.pdf)".
+const BTN_BAIXAR_AGORA = '^\\s*baixar agora\\s*$';
+const DOC_BOLETO_FIXO = 'boleto\\s*\\(\\.pdf\\)';
 
 /**
  * Vai para a área de faturas da empresa ativa e aguarda a página assentar.
@@ -65,6 +69,74 @@ async function contarContas(page, { esperaMax = 18000 } = {}) {
   await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
   await sleep(800);
   return shadow.contar(page, BTN_BAIXAR, { tags: ['button'] });
+}
+
+/**
+ * Lê o estado da paginação da lista de faturas (Móvel e Fixo usam o mesmo
+ * rodapé). Os controles são <li>/<button> com classes:
+ *   button--pagination-previous / button--pagination-next (com "disabled"
+ *   quando na ponta) e button_active na página corrente.
+ * @returns {Promise<{proxima:boolean, ativa:number|null}|null>} null se a
+ *          tela não tem paginação (lista cabe em uma página).
+ */
+async function estadoPaginacao(page) {
+  return page.evaluate(() => {
+    function* deep(root){for(const el of root.querySelectorAll('*')){yield el; if(el.shadowRoot) yield* deep(el.shadowRoot);}}
+    const vis = el => !!(el.offsetParent || el.getClientRects().length);
+    let temPaginacao = false, proxima = false, ativa = null;
+    for (const el of deep(document)) {
+      if (!vis(el)) continue;
+      const cls = (el.className || '').toString();
+      if (/button--pagination-next/.test(cls)) {
+        temPaginacao = true;
+        if (!/disabled/.test(cls)) proxima = true;
+      }
+      if (/button_active/.test(cls)) {
+        const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (/^\d{1,3}$/.test(t)) ativa = Number(t);
+      }
+    }
+    return temPaginacao ? { proxima, ativa } : null;
+  });
+}
+
+/**
+ * Avança para a próxima página da lista de faturas, se houver. Confirma o
+ * avanço comparando o número da página ativa antes/depois do clique (evita
+ * laço infinito caso o clique não surta efeito).
+ * @returns {Promise<boolean>} true se realmente mudou de página.
+ */
+async function irProximaPagina(page) {
+  const antes = await estadoPaginacao(page);
+  if (!antes || !antes.proxima) return false;
+
+  const clicou = await page.evaluate(() => {
+    function* deep(root){for(const el of root.querySelectorAll('*')){yield el; if(el.shadowRoot) yield* deep(el.shadowRoot);}}
+    const vis = el => !!(el.offsetParent || el.getClientRects().length);
+    for (const el of deep(document)) {
+      if (!vis(el)) continue;
+      const cls = (el.className || '').toString();
+      if (/button--pagination-next/.test(cls) && !/disabled/.test(cls)) {
+        const alvo = el.querySelector('button, a') || el;
+        alvo.click();
+        return true;
+      }
+    }
+    return false;
+  });
+  if (!clicou) return false;
+
+  await esperarEstabilizar(page, { timeout: 12000 });
+  await sleep(2500);
+  await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+  await sleep(600);
+
+  const depois = await estadoPaginacao(page);
+  // Só confirma o avanço quando a página ativa efetivamente aumentou.
+  if (depois && antes.ativa != null && depois.ativa != null && depois.ativa <= antes.ativa) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -346,17 +418,15 @@ async function baixarContasDoProduto(page, contrato, contas, rotulo, onDocumento
 
   for (let i = 0; i < contas; i++) {
     const st = status[i];
-    if (st && st.paga) {
+    if (st && st.paga && !config.run.incluirPagas) {
       pagasIgnoradas++;
       logger.info(`  • ${rotulo} conta ${i}: fatura PAGA — ignorada.`);
       continue;
     }
     logger.debug(`${contrato.cnpjFormatado} [${rotulo}] conta ${i}: status ${st ? st.status : 'n/d'}`);
 
-    const docs = [
-      { regex: DOC_FATURA, tipo: 'Fatura' },
-      { regex: DOC_BOLETO, tipo: 'Boleto' },
-    ];
+    const docs = [{ regex: DOC_FATURA, tipo: 'Fatura' }];
+    if (!config.run.semBoleto) docs.push({ regex: DOC_BOLETO, tipo: 'Boleto' });
 
     // metadados descobertos ao baixar a Fatura (reaproveitados no Boleto)
     let metaConta = null;
@@ -424,11 +494,164 @@ async function baixarContasDoProduto(page, contrato, contas, rotulo, onDocumento
         linha: meta.linha || '',
         arquivo: destino,
         competencia: { ano: meta.ano, mes: meta.mes },
+        // Status da fatura no portal Vivo (Paga/Pendente/Atrasada/A vencer).
+        statusPortal: st ? st.status : 'desconhecido',
+        pagaPortal: st ? Boolean(st.paga) : false,
       });
     }
   }
 
   return { faturas, boletos, pagasIgnoradas };
+}
+
+/**
+ * Lê os cards de fatura do Vivo Fixo (valor, vencimento, status) com posição Y.
+ * O Fixo não tem "Baixar fatura"/badges; os dados ficam no texto do card.
+ */
+async function lerCardsFixo(page) {
+  return page.evaluate(() => {
+    function* deep(root){for(const el of root.querySelectorAll('*')){yield el; if(el.shadowRoot) yield* deep(el.shadowRoot);}}
+    const vis = el => !!(el.offsetParent || el.getClientRects().length);
+    const brutos = [];
+    for (const el of deep(document)) {
+      if (!vis(el)) continue;
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t.length > 120) continue;
+      const mv = t.match(/R\$\s*([\d.]+,\d{2})/);
+      const md = t.match(/(\d{2}\/\d{2}\/\d{4})/);
+      if (mv && md) {
+        const atrasada = /atrasad/i.test(t);
+        brutos.push({ y: el.getBoundingClientRect().top, valor: mv[1], vencimento: md[1], status: atrasada ? 'Atrasada' : 'Pendente' });
+      }
+    }
+    // dedup por (valor|vencimento), mantém o de menor Y (âncora do card)
+    const m = new Map();
+    for (const c of brutos) { const k = c.valor + '|' + c.vencimento; if (!m.has(k) || c.y < m.get(k).y) m.set(k, c); }
+    return [...m.values()].sort((a, b) => a.y - b.y);
+  });
+}
+
+/** Ys dos botões "Baixar agora" (para parear com os cards). */
+async function ysBaixarAgora(page) {
+  return page.evaluate((rs) => {
+    function* deep(root){for(const el of root.querySelectorAll('*')){yield el; if(el.shadowRoot) yield* deep(el.shadowRoot);}}
+    const vis = el => !!(el.offsetParent || el.getClientRects().length);
+    const re = new RegExp(rs, 'i');
+    const ys = [];
+    for (const el of deep(document)) {
+      if (el.tagName.toLowerCase() !== 'button') continue;
+      const t = (el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (re.test(t) && vis(el)) ys.push(el.getBoundingClientRect().top);
+    }
+    return ys;
+  }, BTN_BAIXAR_AGORA);
+}
+
+/** Espera (limitado) os botões "Baixar agora" do Fixo aparecerem. */
+async function contarBaixarAgora(page, { esperaMax = 18000 } = {}) {
+  const fim = Date.now() + esperaMax;
+  let q = 0;
+  while (Date.now() < fim) {
+    q = await shadow.contar(page, BTN_BAIXAR_AGORA, { tags: ['button'] });
+    if (q > 0) break;
+    await page.mouse.wheel(0, 900).catch(() => {});
+    await sleep(1500);
+  }
+  return q;
+}
+
+const maisProximo = (cards, y) => {
+  let best = null, bd = Infinity;
+  for (const c of cards) { const d = Math.abs(c.y - y); if (d < bd) { bd = d; best = c; } }
+  return best;
+};
+
+/**
+ * Baixa os BOLETOS do Vivo Fixo via "Baixar agora" -> "Boleto (.pdf)".
+ * Os dados (valor/vencimento/status) vêm dos cards da tela. Cada conta Fixo é
+ * gravada no banco pelo `onDocumento` (produto = 'Fixo').
+ * @returns {Promise<{contas:number, boletos:number}>}
+ */
+async function baixarFixo(page, contrato, onDocumento) {
+  const n = await contarBaixarAgora(page);
+  if (n === 0) {
+    logger.info(`${contrato.cnpjFormatado} [Vivo Fixo]: sem fatura emitida — pulando.`);
+    return { contas: 0, boletos: 0 };
+  }
+  const cards = await lerCardsFixo(page);
+  const ys = await ysBaixarAgora(page);
+  logger.info(`${contrato.cnpjFormatado} [Vivo Fixo]: ${n} conta(s) — baixando boletos.`);
+
+  const hoje = new Date();
+  let boletos = 0;
+
+  for (let i = 0; i < n; i++) {
+    // Pareamento: se há exatamente 1 card por botão, casa por índice (ambos de
+    // cima para baixo — mais confiável); senão, pelo Y mais próximo.
+    const card = cards.length === n ? cards[i] : (ys[i] != null ? maisProximo(cards, ys[i]) : cards[i]);
+    const tmp = path.join(config.paths.downloads, '_tmp', `${contrato.cnpj}-fixo-${i}-${Date.now()}.pdf`);
+
+    const r = await capturarDownload(
+      page,
+      async () => {
+        await shadow.clicar(page, BTN_BAIXAR_AGORA, { nth: i, tags: ['button'] });
+        await sleep(1600);
+        await shadow.clicar(page, DOC_BOLETO_FIXO, { nth: 0, tags: ['button', 'a', 'li'] });
+      },
+      tmp,
+      60000
+    );
+    await page.keyboard.press('Escape').catch(() => {});
+    await sleep(800);
+
+    if (!r.ok) {
+      logger.warn(`${contrato.cnpjFormatado} [Fixo] conta ${i}: falha ao baixar boleto (${r.motivo}).`);
+      continue;
+    }
+    try {
+      await validarPDF(tmp);
+    } catch (err) {
+      logger.warn(`${contrato.cnpjFormatado} [Fixo] conta ${i}: boleto inválido — ${err.message}`);
+      continue;
+    }
+
+    // Competência/ano/mês a partir do vencimento; linha/nº do nome sugerido.
+    const [, mm, yy] = (card && card.vencimento ? card.vencimento : `01/01/${hoje.getFullYear()}`).split('/');
+    const ano = Number(yy) || hoje.getFullYear();
+    const mes = Number(mm) || hoje.getMonth() + 1;
+    const numDoc = (String(r.suggested || '').match(/(\d{6,})/) || [])[1] || null;
+    const linha = numDoc || `fixo-${i}`;
+
+    const destino = caminhoDestino({
+      cnpjFormatado: contrato.cnpjFormatado,
+      ano, mes,
+      arquivo: `Boleto-Fixo-${linha}.pdf`,
+    });
+    if (existe(destino)) {
+      await fsp.unlink(tmp).catch(() => {});
+    } else {
+      await ensureDir(path.dirname(destino));
+      await fsp.rename(tmp, destino).catch(async () => { await fsp.copyFile(tmp, destino); await fsp.unlink(tmp).catch(() => {}); });
+    }
+    boletos++;
+
+    logger.info(`  ✓ Boleto Fixo ${pad2(mes)}/${ano} ${card ? 'R$ ' + card.valor + ' venc ' + card.vencimento : ''} -> ${path.relative(config.paths.downloads, destino)}`);
+
+    await onDocumento({
+      tipo: 'Boleto',
+      produto: 'Fixo',
+      ano, mes,
+      linha,
+      arquivo: destino,
+      numeroDocumento: numDoc,
+      statusPortal: card ? card.status : 'Pendente',
+      pagaPortal: false,
+      valor: card ? numero(card.valor) : null,
+      dataVencimento: card ? isoData(card.vencimento) : null,
+      competencia: { ano, mes },
+    });
+  }
+  return { contas: n, boletos };
 }
 
 /**
@@ -450,26 +673,52 @@ async function processarEmpresa(page, contrato, onDocumento) {
   let totalContas = 0;
   let pagasIgnoradas = 0;
 
+  const MAX_PAGINAS = 25;
+
   for (const produto of PRODUTOS) {
-    // Seleciona o produto (Móvel já é o padrão; Fixo exige a troca).
+    // Seleciona o produto (Móvel já é o padrão; Fixo exige a troca). Isso
+    // recarrega a lista sempre na página 1.
     const disponivel = await selecionarProduto(page, produto.key);
     if (!disponivel) {
       logger.debug(`${contrato.cnpjFormatado}: seletor "${produto.rotulo}" indisponível — pulando produto.`);
       continue;
     }
 
-    const contas = await contarContas(page);
-    if (contas === 0) {
-      logger.info(`${contrato.cnpjFormatado} [${produto.rotulo}]: sem fatura emitida — pulando.`);
-      continue;
-    }
+    // Percorre TODAS as páginas da lista (o rodapé pode ter "2", "3"...).
+    let pagina = 1;
+    let contasNoProduto = 0;
+    while (pagina <= MAX_PAGINAS) {
+      if (produto.key === 'Fixo') {
+        // Vivo Fixo usa "Baixar agora" -> "Boleto (.pdf)" (fluxo próprio).
+        const rf = await baixarFixo(page, contrato, onDocumento);
+        totalContas += rf.contas;
+        boletos += rf.boletos;
+        contasNoProduto += rf.contas;
+      } else {
+        const contas = await contarContas(page);
+        if (contas > 0) {
+          logger.info(`${contrato.cnpjFormatado} [${produto.rotulo}] pág. ${pagina}: ${contas} conta(s) com fatura.`);
+          totalContas += contas;
+          contasNoProduto += contas;
+          const r = await baixarContasDoProduto(page, contrato, contas, produto.rotulo, onDocumento);
+          faturas += r.faturas;
+          boletos += r.boletos;
+          pagasIgnoradas += r.pagasIgnoradas;
+        } else if (pagina === 1) {
+          logger.info(`${contrato.cnpjFormatado} [${produto.rotulo}]: sem fatura emitida — pulando.`);
+        }
+      }
 
-    logger.info(`${contrato.cnpjFormatado} [${produto.rotulo}]: ${contas} conta(s) com fatura.`);
-    totalContas += contas;
-    const r = await baixarContasDoProduto(page, contrato, contas, produto.rotulo, onDocumento);
-    faturas += r.faturas;
-    boletos += r.boletos;
-    pagasIgnoradas += r.pagasIgnoradas;
+      if (!(await irProximaPagina(page))) break;
+      pagina++;
+      logger.info(`${contrato.cnpjFormatado} [${produto.rotulo}]: indo para a página ${pagina}...`);
+    }
+    if (pagina > MAX_PAGINAS) {
+      logger.warn(`${contrato.cnpjFormatado} [${produto.rotulo}]: limite de ${MAX_PAGINAS} páginas atingido.`);
+    }
+    if (contasNoProduto > 0 && pagina > 1) {
+      logger.info(`${contrato.cnpjFormatado} [${produto.rotulo}]: ${contasNoProduto} conta(s) em ${pagina} página(s).`);
+    }
   }
 
   // limpa staging vazio
@@ -481,6 +730,8 @@ async function processarEmpresa(page, contrato, onDocumento) {
 module.exports = {
   abrirAreaFaturas,
   contarContas,
+  estadoPaginacao,
+  irProximaPagina,
   processarEmpresa,
   selecionarProduto,
   produtoAtivo,

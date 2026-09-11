@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Contas a Pagar — Vivo</title>
+<style>
+  :root{
+    --bg:#f4f6f8; --card:#fff; --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb;
+    --azul:#1f4e79; --azul2:#2563eb; --verde:#059669; --amarelo:#b45309; --vermelho:#dc2626; --cinza:#9ca3af;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,Segoe UI,Arial,sans-serif}
+  header{background:var(--azul);color:#fff;padding:14px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header h1{font-size:18px;margin:0;font-weight:600}
+  header .spacer{flex:1}
+  header .status{font-size:12px;opacity:.9}
+  button{font:inherit;border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+  .btn-primary{background:#fff;color:var(--azul);font-weight:600}
+  .btn-primary:disabled{opacity:.6;cursor:default}
+  .wrap{padding:18px 20px;max-width:1400px;margin:0 auto}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card .lbl{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+  .card .val{font-size:22px;font-weight:700;margin-top:4px}
+  .card.money .val{color:var(--azul)}
+  .card.venc .val{color:var(--vermelho)}
+  .card.aberto .val{color:var(--amarelo)}
+  .card.pago .val{color:var(--verde)}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+  .toolbar input,.toolbar select{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit}
+  .toolbar input[type=search]{min-width:240px}
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap;font-size:13px}
+  th{background:#f8fafc;color:var(--muted);font-weight:600;position:sticky;top:0;cursor:pointer;user-select:none}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr:hover td{background:#fafbfc}
+  .tag{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
+  .t-vencer{background:#fef3c7;color:#92400e}.t-vencida{background:#fee2e2;color:#991b1b}
+  .t-paga{background:#d1fae5;color:#065f46}.t-baix{background:#dbeafe;color:#1e40af}
+  .t-movel{background:#e0e7ff;color:#3730a3}.t-fixo{background:#f3e8ff;color:#6b21a8}
+  .pill{font-size:11px;color:var(--muted)}
+  .lnk{color:var(--azul2);text-decoration:none;font-weight:600}
+  .lnk:hover{text-decoration:underline}
+  .muted{color:var(--muted)}
+  .acao{background:#eef2ff;color:#3730a3;padding:5px 10px;border-radius:7px;font-size:12px;font-weight:600}
+  .foot{color:var(--muted);font-size:12px;margin-top:10px}
+  dialog{border:0;border-radius:14px;padding:0;max-width:440px;width:92%}
+  dialog .hd{background:var(--azul);color:#fff;padding:12px 16px;font-weight:600}
+  dialog .bd{padding:16px;display:grid;gap:10px}
+  dialog label{font-size:12px;color:var(--muted);display:block;margin-bottom:3px}
+  dialog input,dialog select,dialog textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font:inherit}
+  dialog .row{display:flex;gap:10px}.dialog .row>*{flex:1}
+  dialog .ft{padding:12px 16px;display:flex;justify-content:flex-end;gap:8px;border-top:1px solid var(--line)}
+  .btn-ok{background:var(--verde);color:#fff}.btn-cancel{background:#eee;color:#333}
+  .empty{padding:40px;text-align:center;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <h1>💳 Contas a Pagar — Vivo</h1>
+  <span class="status" id="status">carregando…</span>
+  <div class="spacer"></div>
+  <a class="btn-primary" id="btnDrive" href="#" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block;margin-right:8px">📁 Pasta no Google Drive</a>
+  <button class="btn-primary" id="btnRun">↻ Atualizar contas (baixar do portal)</button>
+</header>
+
+<div class="wrap">
+  <div class="cards" id="cards"></div>
+
+  <div class="toolbar">
+    <input type="search" id="busca" placeholder="Buscar empresa, nº fatura, linha…" />
+    <select id="fSituacao"><option value="">Todas as situações</option></select>
+    <select id="fCompetencia"><option value="">Todas as competências</option></select>
+    <select id="fEmpresa"><option value="">Todas as empresas</option></select>
+    <span class="muted" id="contador"></span>
+  </div>
+
+  <div style="overflow:auto">
+    <table id="tabela">
+      <thead><tr>
+        <th data-k="situacao">Situação</th>
+        <th data-k="produto">Tipo</th>
+        <th data-k="empresa">Empresa</th>
+        <th data-k="competencia">Comp.</th>
+        <th data-k="data_vencimento">Vencimento</th>
+        <th data-k="valor_original">Valor</th>
+        <th data-k="numero_documento">Nº fatura</th>
+        <th data-k="linha">Linha</th>
+        <th data-k="status_portal">Portal</th>
+        <th>Boleto</th>
+        <th>PDF</th>
+        <th data-k="status_interno">Status interno</th>
+        <th>Ações</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+  <div class="foot" id="foot"></div>
+</div>
+
+<dialog id="dlg">
+  <form method="dialog" id="frm">
+    <div class="hd" id="dlgTitulo">Registrar pagamento / baixa</div>
+    <div class="bd">
+      <div><label>Situação interna</label>
+        <select name="status_interno">
+          <option>Em aberto</option><option>Paga</option><option>Baixada</option>
+          <option>Paga e Baixada</option><option>Necessita conferência</option>
+        </select></div>
+      <div class="row">
+        <div style="flex:1"><label>Valor pago (R$)</label><input name="valor_pago" type="number" step="0.01" /></div>
+        <div style="flex:1"><label>Data de pagamento</label><input name="data_pagamento" type="date" /></div>
+      </div>
+      <div class="row">
+        <div style="flex:1"><label>Data da baixa</label><input name="data_baixa" type="date" /></div>
+        <div style="flex:1"><label>Forma de pagamento</label>
+          <select name="forma_pagamento"><option value=""></option><option>PIX</option><option>Boleto</option><option>Transferência</option><option>Cartão</option><option>Débito automático</option></select></div>
+      </div>
+      <div><label>Comprovante / evidência</label><input name="comprovante" placeholder="ex.: comprovante_pix.pdf ou link" /></div>
+      <div><label>Observações</label><textarea name="observacoes" rows="2"></textarea></div>
+    </div>
+    <div class="ft">
+      <button type="button" class="btn-cancel" id="dlgCancel">Cancelar</button>
+      <button type="submit" class="btn-ok">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const $ = (s,e=document)=>e.querySelector(s);
+const money = v => v==null ? '—' : 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+const dBR = s => { if(!s) return '—'; const m=String(s).match(/(\d{4})-(\d{2})-(\d{2})/); return m?`${m[3]}/${m[2]}/${m[1]}`:s; };
+let CONTAS=[], SORT={k:'data_vencimento',dir:1};
+
+function prodTag(p){
+  if(/fixo/i.test(p||'')) return `<span class="tag t-fixo">Fixo</span>`;
+  if(/mov/i.test(p||'')) return `<span class="tag t-movel">Móvel</span>`;
+  return `<span class="tag">—</span>`;
+}
+function tag(s){
+  const t=(s||'').toLowerCase();
+  if(t.includes('vencida')) return `<span class="tag t-vencida">Vencida</span>`;
+  if(t.includes('vencer')) return `<span class="tag t-vencer">A vencer</span>`;
+  if(t.includes('baix')) return `<span class="tag t-baix">${s}</span>`;
+  if(t.includes('pag')) return `<span class="tag t-paga">${s}</span>`;
+  return `<span class="tag">${s||'—'}</span>`;
+}
+
+async function carregar(){
+  const [resumo, contas] = await Promise.all([
+    fetch('/api/resumo').then(r=>r.json()),
+    fetch('/api/contas').then(r=>r.json()),
+  ]);
+  CONTAS = contas;
+  renderResumo(resumo);
+  preencherFiltros();
+  render();
+  const st = await fetch('/api/run/status').then(r=>r.json()).catch(()=>({}));
+  $('#status').textContent = st.ultima ? `Última coleta: ${new Date(st.ultima.fim).toLocaleString('pt-BR')} · ${st.ultima.faturas||0} faturas` : 'sem coleta registrada';
+  $('#btnRun').disabled = !!st.rodando;
+  if(st.rodando){ $('#status').textContent='coletando do portal…'; setTimeout(carregar, 5000); }
+}
+
+function renderResumo(r){
+  const cards = [
+    ['Total de contas', r.total, ''],
+    ['Em aberto', r.emAberto, 'aberto'],
+    ['Pagas', r.pagas, 'pago'],
+    ['Vencidas', r.vencidas, 'venc'],
+    ['Valor pendente', money(r.valorPendente), 'money'],
+    ['A vencer', money(r.valorAVencer), 'money'],
+  ];
+  $('#cards').innerHTML = cards.map(([l,v,c])=>`<div class="card ${c}"><div class="lbl">${l}</div><div class="val">${v}</div></div>`).join('')
+    + `<div class="card"><div class="lbl">Próximos vencimentos</div><div style="margin-top:6px;font-size:12px">`
+    + (r.proximosVencimentos.length? r.proximosVencimentos.map(p=>`<div>${dBR(p.vencimento)} · <b>${money(p.valor)}</b> <span class="pill">${(p.empresa||'').slice(0,16)}</span></div>`).join('') : '<span class="muted">nenhum</span>')
+    + `</div></div>`;
+}
+
+function preencherFiltros(){
+  const comp=[...new Set(CONTAS.map(c=>c.competencia).filter(Boolean))].sort();
+  const emp=[...new Set(CONTAS.map(c=>c.empresa).filter(Boolean))].sort();
+  const sit=[...new Set(CONTAS.map(c=>c.situacao).filter(Boolean))].sort();
+  const fill=(sel,arr)=>{const cur=sel.value; sel.innerHTML=sel.options[0].outerHTML+arr.map(x=>`<option>${x}</option>`).join(''); sel.value=cur;};
+  fill($('#fCompetencia'),comp); fill($('#fEmpresa'),emp); fill($('#fSituacao'),sit);
+}
+
+function filtradas(){
+  const q=$('#busca').value.trim().toLowerCase();
+  const fs=$('#fSituacao').value, fc=$('#fCompetencia').value, fe=$('#fEmpresa').value;
+  let rows = CONTAS.filter(c=>{
+    if(fs && c.situacao!==fs) return false;
+    if(fc && c.competencia!==fc) return false;
+    if(fe && c.empresa!==fe) return false;
+    if(q){ const hay=[c.empresa,c.numero_documento,c.linha,c.cnpj].join(' ').toLowerCase(); if(!hay.includes(q)) return false; }
+    return true;
+  });
+  const {k,dir}=SORT;
+  rows.sort((a,b)=>{ let x=a[k]??'',y=b[k]??''; if(k==='valor_original'){x=+x||0;y=+y||0;} return (x>y?1:x<y?-1:0)*dir; });
+  return rows;
+}
+
+function render(){
+  const rows=filtradas();
+  $('#contador').textContent = `${rows.length} de ${CONTAS.length} conta(s)`;
+  if(!rows.length){ $('#tbody').innerHTML=`<tr><td colspan="13" class="empty">Nenhuma conta encontrada.</td></tr>`; return; }
+  $('#tbody').innerHTML = rows.map(c=>`
+    <tr>
+      <td>${tag(c.situacao)}</td>
+      <td>${prodTag(c.produto)}</td>
+      <td>${(c.empresa||'—')} <div class="pill">${c.cnpj||''}</div></td>
+      <td>${c.competencia||'—'}</td>
+      <td>${dBR(c.data_vencimento)}</td>
+      <td class="num"><b>${money(c.valor_original)}</b></td>
+      <td>${c.numero_documento||'—'}</td>
+      <td>${c.linha||'—'}</td>
+      <td>${c.status_portal||'—'}</td>
+      <td>${c.boleto_disponivel? `<a class="lnk" href="/api/contas/${c.id}/boleto" target="_blank">boleto</a>`:'<span class="muted">—</span>'}</td>
+      <td>${c.pdf_baixado? `<a class="lnk" href="/api/contas/${c.id}/fatura" target="_blank">fatura</a>`:'<span class="muted">—</span>'}</td>
+      <td>${c.status_interno||'Em aberto'}${c.valor_pago?` <span class="pill">${money(c.valor_pago)}</span>`:''}</td>
+      <td><button class="acao" onclick="abrirModal(${c.id})">registrar</button></td>
+    </tr>`).join('');
+}
+
+// ordenação por coluna
+document.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{
+  const k=th.dataset.k; SORT.dir = SORT.k===k? -SORT.dir : 1; SORT.k=k; render();
+});
+['#busca','#fSituacao','#fCompetencia','#fEmpresa'].forEach(s=>$(s).addEventListener('input',render));
+
+// modal de pagamento/baixa
+let editId=null;
+window.abrirModal=(id)=>{
+  const c=CONTAS.find(x=>x.id===id); editId=id;
+  $('#dlgTitulo').textContent = `${c.empresa||''} · ${c.competencia||''} · ${money(c.valor_original)}`;
+  const f=$('#frm');
+  f.status_interno.value=c.status_interno||'Em aberto';
+  f.valor_pago.value=c.valor_pago??''; f.data_pagamento.value=c.data_pagamento||'';
+  f.data_baixa.value=c.data_baixa||''; f.forma_pagamento.value=c.forma_pagamento||'';
+  f.comprovante.value=c.comprovante||''; f.observacoes.value=c.observacoes||'';
+  $('#dlg').showModal();
+};
+$('#dlgCancel').onclick=()=>$('#dlg').close();
+$('#frm').addEventListener('submit', async (e)=>{
+  const f=e.target, body={};
+  for(const k of ['status_interno','valor_pago','data_pagamento','data_baixa','forma_pagamento','comprovante','observacoes']){
+    let v=f[k].value; if(v==='') v=null; if(k==='valor_pago'&&v!=null) v=Number(v); body[k]=v;
+  }
+  const r=await fetch(`/api/contas/${editId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+  const i=CONTAS.findIndex(x=>x.id===editId); if(i>=0) CONTAS[i]=r;
+  $('#dlg').close(); renderResumo(await fetch('/api/resumo').then(r=>r.json())); render();
+});
+
+$('#btnRun').onclick=async()=>{
+  if(!confirm('Baixar as contas do portal Vivo agora? Pode levar alguns minutos.')) return;
+  $('#btnRun').disabled=true; $('#status').textContent='iniciando coleta…';
+  await fetch('/api/run',{method:'POST'}); setTimeout(carregar,4000);
+};
+
+// link da pasta do Google Drive (configurável no servidor)
+fetch('/api/config').then(r=>r.json()).then(cfg=>{
+  const b=$('#btnDrive');
+  if(cfg.driveFolderUrl){ b.href=cfg.driveFolderUrl; }
+  else { b.href='#'; b.onclick=(e)=>{e.preventDefault();alert('Link da pasta do Drive ainda não configurado. Defina DRIVE_FOLDER_URL no .env.');}; }
+}).catch(()=>{});
+
+carregar();
+setInterval(carregar, 60000); // atualiza a cada minuto
+</script>
+</body>
+</html>
