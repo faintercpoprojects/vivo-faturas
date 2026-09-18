@@ -246,17 +246,18 @@ async function processarContrato(page, contrato, manifest, barra) {
     if (doc.apenasStatus) {
       if (config.run.persistir) {
         try {
-          const r = db.marcarPaga({
+          const r = db.atualizarStatusPortal({
             cnpj: contrato.cnpjFormatado,
             produto: doc.produto,
             linha: doc.linha || '',
             competencia: doc.competencia ? `${pad2(doc.competencia.mes)}/${doc.competencia.ano}` : null,
             valor: doc.valor != null ? doc.valor : null,
             dataVencimento: doc.dataVencimento || null,
+            status: doc.statusPortal || 'Paga',
           });
           if (r.atualizada) stats.contasAtualizadas++;
         } catch (err) {
-          registrarErro('status-pago', err, { cnpj: contrato.cnpjFormatado, produto: doc.produto });
+          registrarErro('status-portal', err, { cnpj: contrato.cnpjFormatado, produto: doc.produto });
         }
       }
       return;

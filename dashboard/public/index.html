@@ -62,6 +62,7 @@
   <span class="status" id="status">carregando…</span>
   <div class="spacer"></div>
   <a class="btn-primary" id="btnDrive" href="#" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block;margin-right:8px">📁 Pasta no Google Drive</a>
+  <button class="btn-primary" id="btnStatus" title="Só lê e atualiza o status (Paga/Pendente/Atrasada) no portal — rápido, sem baixar boletos" style="margin-right:8px">⟳ Atualizar status</button>
   <button class="btn-primary" id="btnRun">↻ Atualizar contas (baixar do portal)</button>
 </header>
 
@@ -73,6 +74,8 @@
     <select id="fSituacao"><option value="">Todas as situações</option></select>
     <select id="fCompetencia"><option value="">Todas as competências</option></select>
     <select id="fEmpresa"><option value="">Todas as empresas</option></select>
+    <select id="fCnpj"><option value="">Todos os CNPJs</option></select>
+    <select id="fProduto"><option value="">Móvel e Fixo</option><option value="Movel">Só Móvel</option><option value="Fixo">Só Fixo</option></select>
     <span class="muted" id="contador"></span>
   </div>
 
@@ -158,8 +161,8 @@ async function carregar(){
   render();
   const st = await fetch('/api/run/status').then(r=>r.json()).catch(()=>({}));
   $('#status').textContent = st.ultima ? `Última coleta: ${new Date(st.ultima.fim).toLocaleString('pt-BR')} · ${st.ultima.faturas||0} faturas` : 'sem coleta registrada';
-  $('#btnRun').disabled = !!st.rodando;
-  if(st.rodando){ $('#status').textContent='coletando do portal…'; setTimeout(carregar, 5000); }
+  $('#btnRun').disabled = !!st.rodando; $('#btnStatus').disabled = !!st.rodando;
+  if(st.rodando){ $('#status').textContent = st.modo==='status' ? 'atualizando status no portal…' : 'coletando do portal…'; setTimeout(carregar, 5000); }
 }
 
 function renderResumo(r){
@@ -181,17 +184,22 @@ function preencherFiltros(){
   const comp=[...new Set(CONTAS.map(c=>c.competencia).filter(Boolean))].sort();
   const emp=[...new Set(CONTAS.map(c=>c.empresa).filter(Boolean))].sort();
   const sit=[...new Set(CONTAS.map(c=>c.situacao).filter(Boolean))].sort();
+  const cnpj=[...new Set(CONTAS.map(c=>c.cnpj).filter(Boolean))].sort();
   const fill=(sel,arr)=>{const cur=sel.value; sel.innerHTML=sel.options[0].outerHTML+arr.map(x=>`<option>${x}</option>`).join(''); sel.value=cur;};
-  fill($('#fCompetencia'),comp); fill($('#fEmpresa'),emp); fill($('#fSituacao'),sit);
+  fill($('#fCompetencia'),comp); fill($('#fEmpresa'),emp); fill($('#fSituacao'),sit); fill($('#fCnpj'),cnpj);
 }
 
 function filtradas(){
   const q=$('#busca').value.trim().toLowerCase();
   const fs=$('#fSituacao').value, fc=$('#fCompetencia').value, fe=$('#fEmpresa').value;
+  const fj=$('#fCnpj').value, fp=$('#fProduto').value;
   let rows = CONTAS.filter(c=>{
     if(fs && c.situacao!==fs) return false;
     if(fc && c.competencia!==fc) return false;
     if(fe && c.empresa!==fe) return false;
+    if(fj && c.cnpj!==fj) return false;
+    if(fp==='Fixo' && !/fixo/i.test(c.produto||'')) return false;
+    if(fp==='Movel' && !/mov/i.test(c.produto||'')) return false;
     if(q){ const hay=[c.empresa,c.numero_documento,c.linha,c.cnpj].join(' ').toLowerCase(); if(!hay.includes(q)) return false; }
     return true;
   });
@@ -226,7 +234,7 @@ function render(){
 document.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{
   const k=th.dataset.k; SORT.dir = SORT.k===k? -SORT.dir : 1; SORT.k=k; render();
 });
-['#busca','#fSituacao','#fCompetencia','#fEmpresa'].forEach(s=>$(s).addEventListener('input',render));
+['#busca','#fSituacao','#fCompetencia','#fEmpresa','#fCnpj','#fProduto'].forEach(s=>$(s).addEventListener('input',render));
 
 // modal de pagamento/baixa
 let editId=null;
@@ -253,8 +261,14 @@ $('#frm').addEventListener('submit', async (e)=>{
 
 $('#btnRun').onclick=async()=>{
   if(!confirm('Baixar as contas do portal Vivo agora? Pode levar alguns minutos.')) return;
-  $('#btnRun').disabled=true; $('#status').textContent='iniciando coleta…';
+  $('#btnRun').disabled=true; $('#btnStatus').disabled=true; $('#status').textContent='iniciando coleta…';
   await fetch('/api/run',{method:'POST'}); setTimeout(carregar,4000);
+};
+
+$('#btnStatus').onclick=async()=>{
+  if(!confirm('Ler e atualizar o status das contas direto do portal Vivo?\n(É rápido: não baixa boletos, só lê Paga/Pendente/Atrasada.)')) return;
+  $('#btnStatus').disabled=true; $('#btnRun').disabled=true; $('#status').textContent='atualizando status no portal…';
+  await fetch('/api/run?modo=status',{method:'POST'}); setTimeout(carregar,4000);
 };
 
 // link da pasta do Google Drive (configurável no servidor)

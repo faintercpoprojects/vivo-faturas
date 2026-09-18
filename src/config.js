@@ -63,6 +63,7 @@ const cli = {
   incluirPagas: hasFlag('--incluir-pagas'),
   semBoleto: hasFlag('--sem-boleto'),
   semJson: hasFlag('--sem-json'),
+  somenteStatus: hasFlag('--somente-status'), // só lê/atualiza o status no portal
   todosCnpj: hasFlag('--todos-cnpj'), // ignora CNPJ_SOMENTE: processa TODAS as empresas
   noDb: hasFlag('--no-db'), // desativa a persistência em SQLite
 };
@@ -117,9 +118,13 @@ const config = {
     limparAposUpload: cli.noCleanup ? false : bool(process.env.LIMPAR_APOS_UPLOAD, true),
     onlyLogin: cli.onlyLogin,
     // Modo verificação (flags): baixar tudo localmente, sem enviar ao Drive.
-    incluirPagas: cli.incluirPagas, // baixa também as faturas já pagas
-    semBoleto: cli.semBoleto, // só a fatura, sem o boleto
-    semJson: cli.semJson, // não gera o .json (só o PDF)
+    // Modo "só status": lê o status no portal e atualiza o banco. Móvel baixa
+    // apenas a fatura (para identificar a linha) e Fixo nem baixa (lê os cards).
+    // Implica: incluir pagas, sem boleto e sem JSON.
+    somenteStatus: cli.somenteStatus,
+    incluirPagas: cli.incluirPagas || cli.somenteStatus, // baixa/lê também as pagas
+    semBoleto: cli.semBoleto || cli.somenteStatus, // só a fatura, sem o boleto
+    semJson: cli.semJson || cli.somenteStatus, // não gera o .json (só o PDF)
     persistir: !cli.noDb, // grava cada conta no banco SQLite (padrão: sim)
   },
 

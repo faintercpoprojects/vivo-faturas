@@ -587,6 +587,9 @@ const maisProximo = (cards, y) => {
  */
 async function baixarFixo(page, contrato, onDocumento) {
   // Lê os cards ANTES (as contas pagas normalmente não têm "Baixar agora").
+  // Obs.: no modo status o Fixo também passa por aqui — o Fixo só expõe os
+  // dados de forma confiável pelo boleto, então mantemos o fluxo normal
+  // (as pagas continuam sem baixar o boleto, só atualizando o status).
   const cards = await lerCardsFixo(page);
 
   // Contas PAGAS: não baixa boleto; só sinaliza a atualização de status.

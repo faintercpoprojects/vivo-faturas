@@ -141,18 +141,25 @@ function servirPdf(campoPath, campoLink, rotulo) {
 app.get('/api/contas/:id/fatura', servirPdf('pdf_path', 'drive_link', 'Fatura'));
 app.get('/api/contas/:id/boleto', servirPdf('boleto_pdf_path', 'boleto_drive_link', 'Boleto'));
 
-// Disparar a ingestão (baixa + banco) em segundo plano.
+// Disparar a ingestão em segundo plano.
+//   modo padrão  -> baixa faturas/boletos + banco (completo)
+//   modo=status  -> só LÊ e atualiza o status no portal (Fixo sem download;
+//                   Móvel baixa só a fatura p/ identificar a linha). Bem rápido.
 let rodando = false;
+let modoAtual = null;
 app.post('/api/run', (req, res) => {
-  if (rodando) return res.json({ ok: true, jaRodando: true });
-  rodando = true;
-  const node = process.execPath;
-  const child = spawn(node, ['index.js', '--todos-cnpj', '--incluir-pagas', '--headless'], {
+  if (rodando) return res.json({ ok: true, jaRodando: true, modo: modoAtual });
+  const modo = (req.query.modo || (req.body && req.body.modo) || '').toString();
+  const args = modo === 'status'
+    ? ['index.js', '--todos-cnpj', '--somente-status', '--headless', '--no-upload']
+    : ['index.js', '--todos-cnpj', '--incluir-pagas', '--headless', '--no-upload'];
+  rodando = true; modoAtual = modo === 'status' ? 'status' : 'completo';
+  const child = spawn(process.execPath, args, {
     cwd: ROOT, detached: true, stdio: 'ignore', windowsHide: true,
   });
-  child.on('exit', () => { rodando = false; });
+  child.on('exit', () => { rodando = false; modoAtual = null; });
   child.unref();
-  res.json({ ok: true, iniciado: true });
+  res.json({ ok: true, iniciado: true, modo: modoAtual });
 });
 app.get('/api/run/status', (req, res) => {
   try {
@@ -160,7 +167,7 @@ app.get('/api/run/status', (req, res) => {
     let ultima = null;
     try { ultima = d.prepare(`SELECT * FROM execucoes ORDER BY id DESC LIMIT 1`).get(); } catch { /* sem tabela */ }
     d.close();
-    res.json({ rodando, ultima });
+    res.json({ rodando, modo: modoAtual, ultima });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
@@ -173,7 +180,22 @@ app.get('/api/config', (req, res) => {
 // ---- estático -------------------------------------------------------------
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.listen(PORT, () => {
-  console.log(`Dashboard Contas a Pagar (Vivo) em http://localhost:${PORT}`);
+// IPs IPv4 da máquina na rede local (para mostrar a URL de acesso dos colegas).
+function ipsLocais() {
+  const nets = require('os').networkInterfaces();
+  const out = [];
+  for (const iface of Object.values(nets)) {
+    for (const n of iface || []) {
+      if (n.family === 'IPv4' && !n.internal) out.push(n.address);
+    }
+  }
+  return out;
+}
+
+// Escuta em TODAS as interfaces (0.0.0.0) para permitir acesso pela rede local.
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Dashboard Contas a Pagar (Vivo)`);
+  console.log(`  local ...... http://localhost:${PORT}`);
+  for (const ip of ipsLocais()) console.log(`  na rede .... http://${ip}:${PORT}`);
   console.log(`Banco: ${DB_FILE}`);
 });
