@@ -418,15 +418,23 @@ async function baixarContasDoProduto(page, contrato, contas, rotulo, onDocumento
 
   for (let i = 0; i < contas; i++) {
     const st = status[i];
-    if (st && st.paga && !config.run.incluirPagas) {
+    const paga = Boolean(st && st.paga);
+    // Conta paga numa execução SEM --incluir-pagas: ignora totalmente.
+    if (paga && !config.run.incluirPagas) {
       pagasIgnoradas++;
       logger.info(`  • ${rotulo} conta ${i}: fatura PAGA — ignorada.`);
       continue;
     }
     logger.debug(`${contrato.cnpjFormatado} [${rotulo}] conta ${i}: status ${st ? st.status : 'n/d'}`);
 
+    // Conta paga: NUNCA baixa o boleto. Baixa só a fatura (nota fiscal), que
+    // identifica a conta e atualiza o status para 'Paga' no banco/dashboard.
     const docs = [{ regex: DOC_FATURA, tipo: 'Fatura' }];
-    if (!config.run.semBoleto) docs.push({ regex: DOC_BOLETO, tipo: 'Boleto' });
+    if (!paga && !config.run.semBoleto) docs.push({ regex: DOC_BOLETO, tipo: 'Boleto' });
+    if (paga) {
+      pagasIgnoradas++;
+      logger.info(`  • ${rotulo} conta ${i}: PAGA — boleto ignorado, só atualiza status.`);
+    }
 
     // metadados descobertos ao baixar a Fatura (reaproveitados no Boleto)
     let metaConta = null;
@@ -520,8 +528,13 @@ async function lerCardsFixo(page) {
       const mv = t.match(/R\$\s*([\d.]+,\d{2})/);
       const md = t.match(/(\d{2}\/\d{2}\/\d{4})/);
       if (mv && md) {
-        const atrasada = /atrasad/i.test(t);
-        brutos.push({ y: el.getBoundingClientRect().top, valor: mv[1], vencimento: md[1], status: atrasada ? 'Atrasada' : 'Pendente' });
+        // "pago"/"paga"/"liquidado"/"quitado" = paga. "a pagar"/"pagar"/
+        // "pagamento" NÃO contam (\b evita casar dentro dessas palavras).
+        const paga = /\bpag[oa]\b|liquidad|quitad/i.test(t) ||
+                     /pagamento\s+(confirmad|efetuad|realizad)/i.test(t);
+        const atrasada = /atrasad|vencid/i.test(t);
+        const status = paga ? 'Paga' : (atrasada ? 'Atrasada' : 'Pendente');
+        brutos.push({ y: el.getBoundingClientRect().top, valor: mv[1], vencimento: md[1], status, paga });
       }
     }
     // dedup por (valor|vencimento), mantém o de menor Y (âncora do card)
@@ -573,22 +586,41 @@ const maisProximo = (cards, y) => {
  * @returns {Promise<{contas:number, boletos:number}>}
  */
 async function baixarFixo(page, contrato, onDocumento) {
+  // Lê os cards ANTES (as contas pagas normalmente não têm "Baixar agora").
+  const cards = await lerCardsFixo(page);
+
+  // Contas PAGAS: não baixa boleto; só sinaliza a atualização de status.
+  let pagasIgnoradas = 0;
+  for (const c of cards) {
+    if (!c.paga) continue;
+    pagasIgnoradas++;
+    logger.info(`  • Vivo Fixo: conta PAGA R$ ${c.valor} venc ${c.vencimento} — boleto ignorado, só atualiza status.`);
+    await onDocumento({
+      apenasStatus: true,
+      produto: 'Fixo',
+      pagaPortal: true,
+      statusPortal: 'Paga',
+      valor: numero(c.valor),
+      dataVencimento: isoData(c.vencimento),
+    });
+  }
+
+  const cardsPend = cards.filter((c) => !c.paga);
   const n = await contarBaixarAgora(page);
   if (n === 0) {
-    logger.info(`${contrato.cnpjFormatado} [Vivo Fixo]: sem fatura emitida — pulando.`);
-    return { contas: 0, boletos: 0 };
+    if (pagasIgnoradas === 0) logger.info(`${contrato.cnpjFormatado} [Vivo Fixo]: sem fatura emitida — pulando.`);
+    return { contas: pagasIgnoradas, boletos: 0, pagasIgnoradas };
   }
-  const cards = await lerCardsFixo(page);
   const ys = await ysBaixarAgora(page);
-  logger.info(`${contrato.cnpjFormatado} [Vivo Fixo]: ${n} conta(s) — baixando boletos.`);
+  logger.info(`${contrato.cnpjFormatado} [Vivo Fixo]: ${n} conta(s) a baixar — baixando boletos.`);
 
   const hoje = new Date();
   let boletos = 0;
 
   for (let i = 0; i < n; i++) {
-    // Pareamento: se há exatamente 1 card por botão, casa por índice (ambos de
-    // cima para baixo — mais confiável); senão, pelo Y mais próximo.
-    const card = cards.length === n ? cards[i] : (ys[i] != null ? maisProximo(cards, ys[i]) : cards[i]);
+    // Pareamento: se há exatamente 1 card (não pago) por botão, casa por índice
+    // (ambos de cima para baixo — mais confiável); senão, pelo Y mais próximo.
+    const card = cardsPend.length === n ? cardsPend[i] : (ys[i] != null ? maisProximo(cardsPend, ys[i]) : cardsPend[i]);
     const tmp = path.join(config.paths.downloads, '_tmp', `${contrato.cnpj}-fixo-${i}-${Date.now()}.pdf`);
 
     const r = await capturarDownload(
@@ -651,7 +683,7 @@ async function baixarFixo(page, contrato, onDocumento) {
       competencia: { ano, mes },
     });
   }
-  return { contas: n, boletos };
+  return { contas: n + pagasIgnoradas, boletos, pagasIgnoradas };
 }
 
 /**
@@ -693,6 +725,7 @@ async function processarEmpresa(page, contrato, onDocumento) {
         const rf = await baixarFixo(page, contrato, onDocumento);
         totalContas += rf.contas;
         boletos += rf.boletos;
+        pagasIgnoradas += rf.pagasIgnoradas || 0;
         contasNoProduto += rf.contas;
       } else {
         const contas = await contarContas(page);

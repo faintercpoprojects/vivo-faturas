@@ -192,6 +192,40 @@ function registrarContaFixo(d) {
   return { nova: !jaExiste };
 }
 
+/**
+ * Marca uma conta JÁ EXISTENTE como paga no portal (status_portal = 'Paga'),
+ * sem baixar/anexar boleto. Usado quando a conta aparece "paga" no portal — o
+ * boleto é ignorado, mas o dashboard passa a mostrá-la como paga.
+ * Casa a linha do banco por:
+ *   1) chave lógica (cnpj|produto|linha|competencia), quando há a linha; ou
+ *   2) par valor + vencimento (Fixo pago não expõe o nº do documento).
+ * NÃO cria conta nova: se nada casar (conta nunca rastreada), apenas ignora.
+ * NÃO toca nos campos do financeiro (status_interno, valor_pago, etc.).
+ * @returns {{atualizada:boolean}}
+ */
+function marcarPaga(d) {
+  abrir();
+  // 1) pela chave lógica (quando conhecemos a linha)
+  if (d.linha && d.competencia) {
+    const hash = hashConta({ cnpj: d.cnpj, produto: d.produto, linha: d.linha, competencia: d.competencia });
+    const r = db.prepare(
+      "UPDATE contas SET status_portal = 'Paga', updated_at = ? WHERE hash_dedup = ?"
+    ).run(agora(), hash);
+    if (r.changes > 0) return { atualizada: true };
+  }
+  // 2) fallback: casa pelo valor + vencimento (Fixo sem nº do documento)
+  if (d.valor != null && d.dataVencimento) {
+    const r = db.prepare(`
+      UPDATE contas SET status_portal = 'Paga', updated_at = ?
+      WHERE cnpj = ? AND produto = ? AND data_vencimento = ?
+        AND ROUND(valor_original, 2) = ROUND(?, 2)
+        AND (status_portal IS NULL OR status_portal <> 'Paga')
+    `).run(agora(), d.cnpj, d.produto, d.dataVencimento, d.valor);
+    if (r.changes > 0) return { atualizada: true };
+  }
+  return { atualizada: false };
+}
+
 /** Registra o resumo de uma execução da automação. */
 function registrarExecucao(e) {
   abrir();
@@ -206,4 +240,4 @@ function fechar() {
   if (db) { try { db.close(); } catch { /* noop */ } db = null; }
 }
 
-module.exports = { abrir, hashConta, registrarFatura, registrarBoleto, registrarContaFixo, registrarExecucao, fechar };
+module.exports = { abrir, hashConta, registrarFatura, registrarBoleto, registrarContaFixo, marcarPaga, registrarExecucao, fechar };

@@ -241,6 +241,26 @@ async function processarContrato(page, contrato, manifest, barra) {
   barra.update({ etapa: `${contrato.cnpjFormatado} — baixando faturas` });
 
   const resumo = await processarEmpresa(page, contrato, async (doc) => {
+    // Conta paga cujo download foi ignorado: só atualiza o status no banco
+    // (status_portal = 'Paga') para o dashboard refletir. Sem PDF/IA/upload.
+    if (doc.apenasStatus) {
+      if (config.run.persistir) {
+        try {
+          const r = db.marcarPaga({
+            cnpj: contrato.cnpjFormatado,
+            produto: doc.produto,
+            linha: doc.linha || '',
+            competencia: doc.competencia ? `${pad2(doc.competencia.mes)}/${doc.competencia.ano}` : null,
+            valor: doc.valor != null ? doc.valor : null,
+            dataVencimento: doc.dataVencimento || null,
+          });
+          if (r.atualizada) stats.contasAtualizadas++;
+        } catch (err) {
+          registrarErro('status-pago', err, { cnpj: contrato.cnpjFormatado, produto: doc.produto });
+        }
+      }
+      return;
+    }
     if (doc.tipo === 'Fatura') { stats.faturasEncontradas++; stats.faturasBaixadas++; }
     else stats.boletosBaixados++;
     await finalizarDocumento(doc, contrato, manifest);
