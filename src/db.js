@@ -68,6 +68,11 @@ function abrir() {
     CREATE INDEX IF NOT EXISTS idx_contas_venc ON contas(data_vencimento);
     CREATE INDEX IF NOT EXISTS idx_contas_status ON contas(status_portal);
     CREATE INDEX IF NOT EXISTS idx_contas_cnpj ON contas(cnpj);
+    -- origem = 'manual' para lançamentos avulsos do financeiro; NULL p/ portal.
+  `);
+  // Migração leve: adiciona a coluna 'origem' em bancos antigos (sem apagar dados).
+  try { db.exec(`ALTER TABLE contas ADD COLUMN origem TEXT`); } catch { /* já existe */ }
+  db.exec(`
 
     CREATE TABLE IF NOT EXISTS execucoes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

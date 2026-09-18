@@ -29,11 +29,14 @@ const DRIVE_FOLDER_URL =
     ? `https://drive.google.com/drive/folders/${process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID}`
     : '');
 
+let migrado = false;
 function db() {
   // Abre a cada requisição (leitura barata; garante ver dados de outros processos).
   fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
   const d = new DatabaseSync(DB_FILE);
   d.exec(`CREATE TABLE IF NOT EXISTS contas (id INTEGER PRIMARY KEY);`); // no-op se já existe
+  // Migração leve (1x): coluna que marca lançamentos manuais.
+  if (!migrado) { try { d.exec(`ALTER TABLE contas ADD COLUMN origem TEXT`); } catch { /* já existe */ } migrado = true; }
   return d;
 }
 
@@ -48,6 +51,18 @@ function situacao(c) {
   return 'A vencer';
 }
 
+/**
+ * Só interessam ao dashboard as contas que no Vivo Empresas estão como
+ * "paga", "pronta para pagar" ou "pagar até" (e equivalentes: pendente,
+ * a vencer, vencida/atrasada). Lançamentos manuais (origem = 'manual')
+ * sempre aparecem. Contas com status desconhecido/sem status ficam ocultas.
+ */
+function relevante(c) {
+  if ((c.origem || '') === 'manual') return true;
+  const s = (c.status_portal || '').toLowerCase();
+  return /pag|pronta|pendente|atrasad|vencid/.test(s);
+}
+
 const app = express();
 app.use(express.json());
 
@@ -58,7 +73,7 @@ app.get('/api/contas', (req, res) => {
     const d = db();
     const rows = d.prepare(`SELECT * FROM contas ORDER BY data_vencimento IS NULL, data_vencimento`).all();
     d.close();
-    res.json(rows.map((c) => ({ ...c, situacao: situacao(c) })));
+    res.json(rows.filter(relevante).map((c) => ({ ...c, situacao: situacao(c) })));
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
@@ -67,7 +82,7 @@ app.get('/api/contas', (req, res) => {
 app.get('/api/resumo', (req, res) => {
   try {
     const d = db();
-    const rows = d.prepare(`SELECT * FROM contas`).all();
+    const rows = d.prepare(`SELECT * FROM contas`).all().filter(relevante);
     d.close();
     const t = hoje();
     const pago = (c) => /pag|baix/i.test(c.status_interno || '') || /pag/i.test(c.status_portal || '');
@@ -110,6 +125,50 @@ app.patch('/api/contas/:id', (req, res) => {
     vals.push(new Date().toISOString(), Number(req.params.id));
     d.prepare(`UPDATE contas SET ${set} WHERE id = ?`).run(...vals);
     const row = d.prepare(`SELECT * FROM contas WHERE id = ?`).get(Number(req.params.id));
+    d.close();
+    res.json({ ...row, situacao: situacao(row) });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// Excluir uma conta do dashboard (lixeira).
+app.delete('/api/contas/:id', (req, res) => {
+  try {
+    const d = db();
+    const r = d.prepare(`DELETE FROM contas WHERE id = ?`).run(Number(req.params.id));
+    d.close();
+    res.json({ ok: true, removidas: r.changes });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// Cadastrar uma NOTA manualmente (lançamento avulso do financeiro).
+app.post('/api/contas', (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.empresa && !b.cnpj) return res.status(400).json({ erro: 'informe ao menos a empresa ou o CNPJ' });
+    const agora = new Date().toISOString();
+    let comp = b.competencia || '';
+    let ano = null, mes = null;
+    const mv = String(b.data_vencimento || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (mv) { ano = Number(mv[1]); mes = Number(mv[2]); if (!comp) comp = `${mv[2]}/${mv[1]}`; }
+    const hash = 'manual-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    const d = db();
+    const info = d.prepare(`
+      INSERT INTO contas
+        (hash_dedup, cnpj, empresa, produto, linha, competencia, ano, mes,
+         numero_documento, data_vencimento, valor_original, status_portal,
+         origem, status_interno, observacoes, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?, ?,?,?, 'Pendente', 'manual', 'Em aberto', ?, ?, ?)
+    `).run(
+      hash, b.cnpj || null, b.empresa || null, b.produto || 'Movel', b.linha || null,
+      comp || null, ano, mes, b.numero_documento || null, b.data_vencimento || null,
+      b.valor_original != null && b.valor_original !== '' ? Number(b.valor_original) : null,
+      b.observacoes || null, agora, agora
+    );
+    const row = d.prepare(`SELECT * FROM contas WHERE id = ?`).get(Number(info.lastInsertRowid));
     d.close();
     res.json({ ...row, situacao: situacao(row) });
   } catch (e) {

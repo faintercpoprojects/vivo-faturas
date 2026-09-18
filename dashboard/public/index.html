@@ -44,6 +44,8 @@
   .lnk:hover{text-decoration:underline}
   .muted{color:var(--muted)}
   .acao{background:#eef2ff;color:#3730a3;padding:5px 10px;border-radius:7px;font-size:12px;font-weight:600}
+  .lixo{background:#fee2e2;color:#991b1b;padding:5px 9px;border-radius:7px;font-size:12px;font-weight:600;margin-left:6px}
+  .btn-add{background:var(--verde);color:#fff;font-weight:600}
   .foot{color:var(--muted);font-size:12px;margin-top:10px}
   dialog{border:0;border-radius:14px;padding:0;max-width:440px;width:92%}
   dialog .hd{background:var(--azul);color:#fff;padding:12px 16px;font-weight:600}
@@ -76,6 +78,7 @@
     <select id="fEmpresa"><option value="">Todas as empresas</option></select>
     <select id="fCnpj"><option value="">Todos os CNPJs</option></select>
     <select id="fProduto"><option value="">Móvel e Fixo</option><option value="Movel">Só Móvel</option><option value="Fixo">Só Fixo</option></select>
+    <button id="btnAdd" class="btn-add" title="Cadastrar uma nota manualmente">➕ Nova nota</button>
     <span class="muted" id="contador"></span>
   </div>
 
@@ -126,6 +129,32 @@
     <div class="ft">
       <button type="button" class="btn-cancel" id="dlgCancel">Cancelar</button>
       <button type="submit" class="btn-ok">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgAdd">
+  <form method="dialog" id="frmAdd">
+    <div class="hd">➕ Cadastrar nota manual</div>
+    <div class="bd">
+      <div class="row">
+        <div style="flex:2"><label>Empresa</label><input name="empresa" placeholder="Nome da empresa" /></div>
+        <div style="flex:1"><label>Tipo</label><select name="produto"><option value="Movel">Móvel</option><option value="Fixo">Fixo</option></select></div>
+      </div>
+      <div><label>CNPJ</label><input name="cnpj" placeholder="00.000.000/0000-00" /></div>
+      <div class="row">
+        <div style="flex:1"><label>Vencimento</label><input name="data_vencimento" type="date" /></div>
+        <div style="flex:1"><label>Valor (R$)</label><input name="valor_original" type="number" step="0.01" placeholder="0,00" /></div>
+      </div>
+      <div class="row">
+        <div style="flex:1"><label>Linha</label><input name="linha" placeholder="opcional" /></div>
+        <div style="flex:1"><label>Nº documento</label><input name="numero_documento" placeholder="opcional" /></div>
+      </div>
+      <div><label>Observações</label><textarea name="observacoes" rows="2"></textarea></div>
+    </div>
+    <div class="ft">
+      <button type="button" class="btn-cancel" id="dlgAddCancel">Cancelar</button>
+      <button type="submit" class="btn-ok">Cadastrar</button>
     </div>
   </form>
 </dialog>
@@ -226,7 +255,7 @@ function render(){
       <td>${c.boleto_disponivel? `<a class="lnk" href="/api/contas/${c.id}/boleto" target="_blank">boleto</a>`:'<span class="muted">—</span>'}</td>
       <td>${c.pdf_baixado? `<a class="lnk" href="/api/contas/${c.id}/fatura" target="_blank">fatura</a>`:'<span class="muted">—</span>'}</td>
       <td>${c.status_interno||'Em aberto'}${c.valor_pago?` <span class="pill">${money(c.valor_pago)}</span>`:''}</td>
-      <td><button class="acao" onclick="abrirModal(${c.id})">registrar</button></td>
+      <td style="white-space:nowrap"><button class="acao" onclick="abrirModal(${c.id})">registrar</button><button class="lixo" title="Excluir do dashboard" onclick="excluirConta(${c.id})">🗑</button></td>
     </tr>`).join('');
 }
 
@@ -257,6 +286,29 @@ $('#frm').addEventListener('submit', async (e)=>{
   const r=await fetch(`/api/contas/${editId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
   const i=CONTAS.findIndex(x=>x.id===editId); if(i>=0) CONTAS[i]=r;
   $('#dlg').close(); renderResumo(await fetch('/api/resumo').then(r=>r.json())); render();
+});
+
+// excluir conta (lixeira)
+window.excluirConta=async(id)=>{
+  const c=CONTAS.find(x=>x.id===id);
+  if(!confirm(`Excluir esta conta do dashboard?\n${c?`${c.empresa||''} · ${c.competencia||''} · ${money(c.valor_original)}`:''}`)) return;
+  const r=await fetch(`/api/contas/${id}`,{method:'DELETE'}).then(r=>r.json()).catch(()=>({}));
+  if(r&&r.ok){ CONTAS=CONTAS.filter(x=>x.id!==id); renderResumo(await fetch('/api/resumo').then(r=>r.json())); preencherFiltros(); render(); }
+  else alert('Não foi possível excluir.');
+};
+
+// cadastrar nota manual
+$('#btnAdd').onclick=()=>{ $('#frmAdd').reset(); $('#dlgAdd').showModal(); };
+$('#dlgAddCancel').onclick=()=>$('#dlgAdd').close();
+$('#frmAdd').addEventListener('submit', async (e)=>{
+  const f=e.target, body={};
+  for(const k of ['empresa','cnpj','produto','data_vencimento','valor_original','linha','numero_documento','observacoes']){
+    let v=f[k].value.trim(); if(v==='') v=null; if(k==='valor_original'&&v!=null) v=Number(v); body[k]=v;
+  }
+  if(!body.empresa && !body.cnpj){ alert('Informe ao menos a empresa ou o CNPJ.'); return; }
+  const r=await fetch('/api/contas',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+  if(r&&r.id){ CONTAS.push(r); renderResumo(await fetch('/api/resumo').then(r=>r.json())); preencherFiltros(); render(); $('#dlgAdd').close(); }
+  else alert('Não foi possível cadastrar: '+((r&&r.erro)||'erro'));
 });
 
 $('#btnRun').onclick=async()=>{
