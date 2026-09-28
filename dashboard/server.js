@@ -201,23 +201,50 @@ app.get('/api/contas/:id/fatura', servirPdf('pdf_path', 'drive_link', 'Fatura'))
 app.get('/api/contas/:id/boleto', servirPdf('boleto_pdf_path', 'boleto_drive_link', 'Boleto'));
 
 // Disparar a ingestão em segundo plano.
-//   modo padrão  -> baixa faturas/boletos + banco (completo)
+//   modo padrão  -> baixa faturas/boletos (PDF) + atualiza status no banco (completo)
 //   modo=status  -> só LÊ e atualiza o status no portal (Fixo sem download;
 //                   Móvel baixa só a fatura p/ identificar a linha). Bem rápido.
+// A saída do processo vai para logs/dashboard-sync.log.
+const SYNC_LOG = path.join(ROOT, 'logs', 'dashboard-sync.log');
 let rodando = false;
 let modoAtual = null;
-app.post('/api/run', (req, res) => {
-  if (rodando) return res.json({ ok: true, jaRodando: true, modo: modoAtual });
-  const modo = (req.query.modo || (req.body && req.body.modo) || '').toString();
+let inicioAtual = null;
+let ultimoResultado = null; // { modo, inicio, fim, codigo, ok }
+
+function iniciarColeta(modo) {
+  if (rodando) return false;
+  modo = modo === 'status' ? 'status' : 'completo';
   const args = modo === 'status'
     ? ['index.js', '--todos-cnpj', '--somente-status', '--headless', '--no-upload']
     : ['index.js', '--todos-cnpj', '--incluir-pagas', '--headless', '--no-upload'];
-  rodando = true; modoAtual = modo === 'status' ? 'status' : 'completo';
+  fs.mkdirSync(path.dirname(SYNC_LOG), { recursive: true });
+  const out = fs.openSync(SYNC_LOG, 'a');
+  fs.writeSync(out, `
+==== Início (${modo}): ${new Date().toLocaleString('pt-BR')} ====
+`);
+  rodando = true; modoAtual = modo; inicioAtual = new Date().toISOString();
   const child = spawn(process.execPath, args, {
-    cwd: ROOT, detached: true, stdio: 'ignore', windowsHide: true,
+    cwd: ROOT, detached: true, stdio: ['ignore', out, out], windowsHide: true,
   });
-  child.on('exit', () => { rodando = false; modoAtual = null; });
+  const fim = (codigo) => {
+    if (!rodando) return;
+    ultimoResultado = { modo, inicio: inicioAtual, fim: new Date().toISOString(), codigo, ok: codigo === 0 || codigo === 1 };
+    try { fs.writeSync(out, `==== Fim (${modo}): ${new Date().toLocaleString('pt-BR')} (exit ${codigo}) ====
+`); fs.closeSync(out); } catch { /* ignore */ }
+    rodando = false; modoAtual = null; inicioAtual = null;
+    console.log(`Coleta (${modo}) finalizada — exit ${codigo}`);
+  };
+  child.on('exit', (code) => fim(code));
+  child.on('error', (e) => { console.error('Falha ao iniciar a coleta:', e.message); fim(-1); });
   child.unref();
+  console.log(`Coleta (${modo}) iniciada — log em ${SYNC_LOG}`);
+  return true;
+}
+
+app.post('/api/run', (req, res) => {
+  if (rodando) return res.json({ ok: true, jaRodando: true, modo: modoAtual });
+  const modo = (req.query.modo || (req.body && req.body.modo) || '').toString();
+  iniciarColeta(modo);
   res.json({ ok: true, iniciado: true, modo: modoAtual });
 });
 app.get('/api/run/status', (req, res) => {
@@ -226,7 +253,7 @@ app.get('/api/run/status', (req, res) => {
     let ultima = null;
     try { ultima = d.prepare(`SELECT * FROM execucoes ORDER BY id DESC LIMIT 1`).get(); } catch { /* sem tabela */ }
     d.close();
-    res.json({ rodando, modo: modoAtual, ultima });
+    res.json({ rodando, modo: modoAtual, inicio: inicioAtual, ultima, resultado: ultimoResultado });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
@@ -257,4 +284,10 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`  local ...... http://localhost:${PORT}`);
   for (const ip of ipsLocais()) console.log(`  na rede .... http://${ip}:${PORT}`);
   console.log(`Banco: ${DB_FILE}`);
+  // Ao subir o servidor, já sincroniza com o Vivo Empresas (baixa os PDFs e
+  // atualiza o status). Desligue com AUTO_SYNC=false; AUTO_SYNC_MODO=status
+  // faz só a leitura rápida de status.
+  if (!/^(false|0|nao|não)$/i.test(process.env.AUTO_SYNC || '')) {
+    iniciarColeta(process.env.AUTO_SYNC_MODO || 'completo');
+  }
 });

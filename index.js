@@ -455,4 +455,9 @@ main()
     registrarErro('fatal', err);
     logger.error('Execução abortada.');
     process.exitCode = 2;
+  })
+  .finally(() => {
+    // Timers do logger (rotação diária) mantêm o processo vivo após o fim;
+    // encerra explicitamente depois de dar tempo de gravar os logs.
+    setTimeout(() => process.exit(process.exitCode), 2000);
   });

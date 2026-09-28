@@ -193,8 +193,13 @@ async function carregar(){
   render();
   const st = await fetch('/api/run/status').then(r=>r.json()).catch(()=>({}));
   $('#status').textContent = st.ultima ? `Última coleta: ${new Date(st.ultima.fim).toLocaleString('pt-BR')} · ${st.ultima.faturas||0} faturas` : 'sem coleta registrada';
+  if(st.resultado && !st.resultado.ok) $('#status').textContent += ' · ⚠ última sincronização falhou (veja logs/dashboard-sync.log; se pedir login, rode npm run login)';
   $('#btnRun').disabled = !!st.rodando; $('#btnStatus').disabled = !!st.rodando;
-  if(st.rodando){ $('#status').textContent = st.modo==='status' ? 'atualizando status no portal…' : 'coletando do portal…'; setTimeout(carregar, 5000); }
+  if(st.rodando){
+    const min = st.inicio ? Math.floor((Date.now()-new Date(st.inicio))/60000) : 0;
+    $('#status').textContent = (st.modo==='status' ? '⟳ atualizando status no Vivo Empresas…' : '⟳ sincronizando com o Vivo Empresas (baixando PDFs e status)…') + (min ? ` ${min} min` : '') + ' — a tela atualiza sozinha';
+    setTimeout(carregar, 5000);
+  }
 }
 
 function renderResumo(r){
