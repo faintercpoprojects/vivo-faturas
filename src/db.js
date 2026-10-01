@@ -72,6 +72,9 @@ function abrir() {
   `);
   // Migração leve: adiciona a coluna 'origem' em bancos antigos (sem apagar dados).
   try { db.exec(`ALTER TABLE contas ADD COLUMN origem TEXT`); } catch { /* já existe */ }
+  // Outras operadoras (Desktop, AONet...): código de pagamento direto no dashboard.
+  try { db.exec(`ALTER TABLE contas ADD COLUMN linha_digitavel TEXT`); } catch { /* já existe */ }
+  try { db.exec(`ALTER TABLE contas ADD COLUMN pix_code TEXT`); } catch { /* já existe */ }
   db.exec(`
 
     CREATE TABLE IF NOT EXISTS execucoes (
@@ -235,6 +238,43 @@ function atualizarStatusPortal(d) {
   return { atualizada: false };
 }
 
+/**
+ * Registra uma conta de OUTRA OPERADORA (Desktop, AONet...), lida do portal
+ * de 2ª via pelo CNPJ. produto = nome da operadora; linha = nº do contrato.
+ * Preserva os campos do financeiro no upsert.
+ * @returns {{nova:boolean}}
+ */
+function registrarContaOperadora(d) {
+  abrir();
+  const hash = hashConta({ cnpj: d.cnpj, produto: d.produto, linha: d.linha, competencia: d.competencia });
+  const jaExiste = db.prepare('SELECT 1 FROM contas WHERE hash_dedup = ?').get(hash);
+  db.prepare(`
+    INSERT INTO contas
+      (hash_dedup, cnpj, empresa, produto, linha, competencia, ano, mes,
+       numero_documento, data_vencimento, valor_original, status_portal,
+       boleto_disponivel, boleto_pdf_path, linha_digitavel, pix_code, pdf_baixado,
+       data_download, disponivel_em, status_interno, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,0, ?,?, 'Em aberto', ?,?)
+    ON CONFLICT(hash_dedup) DO UPDATE SET
+      empresa           = COALESCE(excluded.empresa, contas.empresa),
+      numero_documento  = COALESCE(excluded.numero_documento, contas.numero_documento),
+      data_vencimento   = COALESCE(excluded.data_vencimento,  contas.data_vencimento),
+      valor_original    = COALESCE(excluded.valor_original,   contas.valor_original),
+      status_portal     = excluded.status_portal,
+      boleto_disponivel = MAX(contas.boleto_disponivel, excluded.boleto_disponivel),
+      boleto_pdf_path   = COALESCE(excluded.boleto_pdf_path, contas.boleto_pdf_path),
+      linha_digitavel   = COALESCE(excluded.linha_digitavel, contas.linha_digitavel),
+      pix_code          = COALESCE(excluded.pix_code, contas.pix_code),
+      updated_at        = excluded.updated_at
+  `).run(
+    hash, d.cnpj, d.empresa || null, d.produto, d.linha || null, d.competencia || null, d.ano || null, d.mes || null,
+    d.numeroDocumento || null, d.dataVencimento || null, d.valor != null ? d.valor : null, d.statusPortal || null,
+    d.boletoPdfPath || d.linhaDigitavel ? 1 : 0, d.boletoPdfPath || null, d.linhaDigitavel || null, d.pixCode || null,
+    agora(), agora(), agora(), agora()
+  );
+  return { nova: !jaExiste };
+}
+
 /** Compat.: marca uma conta existente como paga. @deprecated use atualizarStatusPortal */
 function marcarPaga(d) {
   return atualizarStatusPortal({ ...d, status: 'Paga' });
@@ -254,4 +294,4 @@ function fechar() {
   if (db) { try { db.close(); } catch { /* noop */ } db = null; }
 }
 
-module.exports = { abrir, hashConta, registrarFatura, registrarBoleto, registrarContaFixo, marcarPaga, atualizarStatusPortal, registrarExecucao, fechar };
+module.exports = { abrir, hashConta, registrarFatura, registrarBoleto, registrarContaFixo, registrarContaOperadora, marcarPaga, atualizarStatusPortal, registrarExecucao, fechar };

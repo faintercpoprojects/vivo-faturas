@@ -13,6 +13,7 @@ echo.
 echo ====================================================
 echo   Baixando faturas do mes... (pode levar alguns min)
 echo ====================================================
+"%NODE%" "%~dp0operadoras.js" --headless
 "%NODE%" "%~dp0index.js" --todos-cnpj --incluir-pagas --headless
 
 echo.

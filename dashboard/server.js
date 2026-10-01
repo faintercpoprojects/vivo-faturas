@@ -223,9 +223,9 @@ function iniciarColeta(modo) {
 ==== Início (${modo}): ${new Date().toLocaleString('pt-BR')} ====
 `);
   rodando = true; modoAtual = modo; inicioAtual = new Date().toISOString();
-  const child = spawn(process.execPath, args, {
-    cwd: ROOT, detached: true, stdio: ['ignore', out, out], windowsHide: true,
-  });
+  // 1º outras operadoras (Desktop, AONet — rápido), depois a Vivo.
+  const etapas = [['operadoras.js', '--headless'], args];
+  let pior = 0;
   const fim = (codigo) => {
     if (!rodando) return;
     ultimoResultado = { modo, inicio: inicioAtual, fim: new Date().toISOString(), codigo, ok: codigo === 0 || codigo === 1 };
@@ -234,9 +234,16 @@ function iniciarColeta(modo) {
     rodando = false; modoAtual = null; inicioAtual = null;
     console.log(`Coleta (${modo}) finalizada — exit ${codigo}`);
   };
-  child.on('exit', (code) => fim(code));
-  child.on('error', (e) => { console.error('Falha ao iniciar a coleta:', e.message); fim(-1); });
-  child.unref();
+  const proxima = (i) => {
+    if (i >= etapas.length) return fim(pior);
+    const child = spawn(process.execPath, etapas[i], {
+      cwd: ROOT, detached: true, stdio: ['ignore', out, out], windowsHide: true,
+    });
+    child.on('exit', (code) => { pior = Math.max(pior, code ?? 2); proxima(i + 1); });
+    child.on('error', (e) => { console.error('Falha ao iniciar a coleta:', e.message); pior = 2; proxima(i + 1); });
+    child.unref();
+  };
+  proxima(0);
   console.log(`Coleta (${modo}) iniciada — log em ${SYNC_LOG}`);
   return true;
 }

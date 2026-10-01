@@ -38,7 +38,8 @@
   .tag{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
   .t-vencer{background:#fef3c7;color:#92400e}.t-vencida{background:#fee2e2;color:#991b1b}
   .t-paga{background:#d1fae5;color:#065f46}.t-baix{background:#dbeafe;color:#1e40af}
-  .t-movel{background:#e0e7ff;color:#3730a3}.t-fixo{background:#f3e8ff;color:#6b21a8}
+  .t-movel{background:#e0e7ff;color:#3730a3}.t-fixo{background:#f3e8ff;color:#6b21a8}.t-outra{background:#e0f2fe;color:#075985}
+  .copiar{border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:2px 7px;font-size:12px;cursor:pointer;margin:1px 2px 1px 0}.copiar:hover{border-color:#64748b}
   .pill{font-size:11px;color:var(--muted)}
   .lnk{color:var(--azul2);text-decoration:none;font-weight:600}
   .lnk:hover{text-decoration:underline}
@@ -80,7 +81,7 @@
     <select id="fCompetencia"><option value="">Todas as competências</option></select>
     <select id="fEmpresa"><option value="">Todas as empresas</option></select>
     <select id="fCnpj"><option value="">Todos os CNPJs</option></select>
-    <select id="fProduto"><option value="">Móvel e Fixo</option><option value="Movel">Só Móvel</option><option value="Fixo">Só Fixo</option></select>
+    <select id="fProduto"><option value="">Todas as operadoras</option><option value="Movel">Vivo Móvel</option><option value="Fixo">Vivo Fixo</option><option value="Desktop">Desktop</option><option value="AONet">AONet</option></select>
     <button id="btnAdd" class="btn-add" title="Cadastrar uma nota manualmente">➕ Nova nota</button>
     <span class="muted" id="contador"></span>
   </div>
@@ -169,6 +170,7 @@ const dBR = s => { if(!s) return '—'; const m=String(s).match(/(\d{4})-(\d{2})
 let CONTAS=[], SORT={k:'data_vencimento',dir:1};
 
 function prodTag(p){
+  if(/^(desktop|aonet|vero)$/i.test(p||'')) return `<span class="tag t-outra">${p}</span>`;
   if(/fixo/i.test(p||'')) return `<span class="tag t-fixo">Fixo</span>`;
   if(/mov/i.test(p||'')) return `<span class="tag t-movel">Móvel</span>`;
   return `<span class="tag">—</span>`;
@@ -237,6 +239,7 @@ function filtradas(){
     if(fj && c.cnpj!==fj) return false;
     if(fp==='Fixo' && !/fixo/i.test(c.produto||'')) return false;
     if(fp==='Movel' && !/mov/i.test(c.produto||'')) return false;
+    if(fp && !['Fixo','Movel'].includes(fp) && c.produto!==fp) return false;
     if(q){ const hay=[c.empresa,c.numero_documento,c.linha,c.cnpj].join(' ').toLowerCase(); if(!hay.includes(q)) return false; }
     return true;
   });
@@ -244,6 +247,21 @@ function filtradas(){
   rows.sort((a,b)=>{ let x=a[k]??'',y=b[k]??''; if(k==='valor_original'){x=+x||0;y=+y||0;} return (x>y?1:x<y?-1:0)*dir; });
   return rows;
 }
+
+// Boleto: PDF quando houver; senão, botões para copiar linha digitável / Pix.
+function boletoCel(c){
+  const out=[];
+  if(c.boleto_pdf_path||c.boleto_drive_link||(c.boleto_disponivel&&!c.linha_digitavel)) out.push(`<a class="lnk" href="/api/contas/${c.id}/boleto" target="_blank">boleto</a>`);
+  if(c.linha_digitavel) out.push(`<button class="copiar" title="Copiar linha digitável" onclick="copiar(${c.id},'linha_digitavel')">código</button>`);
+  if(c.pix_code) out.push(`<button class="copiar" title="Copiar Pix copia e cola" onclick="copiar(${c.id},'pix_code')">pix</button>`);
+  return out.join(' ')||'<span class="muted">—</span>';
+}
+window.copiar=async(id,campo)=>{
+  const v=(CONTAS.find(x=>x.id===id)||{})[campo]; if(!v) return;
+  try{ await navigator.clipboard.writeText(v); }
+  catch{ const t=document.createElement('textarea'); t.value=v; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove(); }
+  alert(campo==='pix_code'?'Pix copia e cola copiado.':'Linha digitável copiada.');
+};
 
 function render(){
   const rows=filtradas();
@@ -260,7 +278,7 @@ function render(){
       <td>${c.numero_documento||'—'}</td>
       <td>${c.linha||'—'}</td>
       <td>${c.status_portal||'—'}</td>
-      <td>${c.boleto_disponivel? `<a class="lnk" href="/api/contas/${c.id}/boleto" target="_blank">boleto</a>`:'<span class="muted">—</span>'}</td>
+      <td>${boletoCel(c)}</td>
       <td>${c.pdf_baixado? `<a class="lnk" href="/api/contas/${c.id}/fatura" target="_blank">fatura</a>`:'<span class="muted">—</span>'}</td>
       <td>${c.status_interno||'Em aberto'}${c.valor_pago?` <span class="pill">${money(c.valor_pago)}</span>`:''}</td>
       <td style="white-space:nowrap"><button class="acao" onclick="abrirModal(${c.id})">registrar</button><button class="lixo" title="Excluir do dashboard" onclick="excluirConta(${c.id})">🗑</button></td>
