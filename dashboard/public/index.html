@@ -81,7 +81,7 @@
     <select id="fCompetencia"><option value="">Todas as competências</option></select>
     <select id="fEmpresa"><option value="">Todas as empresas</option></select>
     <select id="fCnpj"><option value="">Todos os CNPJs</option></select>
-    <select id="fProduto"><option value="">Todas as operadoras</option><option value="Movel">Vivo Móvel</option><option value="Fixo">Vivo Fixo</option><option value="Desktop">Desktop</option><option value="AONet">AONet</option></select>
+    <select id="fProduto"><option value="">Todas as operadoras</option><option value="Movel">Vivo Móvel</option><option value="Fixo">Vivo Fixo</option><option value="Desktop">Desktop</option><option value="AONet">AONet</option><option value="Vero">Vero</option></select>
     <button id="btnAdd" class="btn-add" title="Cadastrar uma nota manualmente">➕ Nova nota</button>
     <span class="muted" id="contador"></span>
   </div>
@@ -143,7 +143,7 @@
     <div class="bd">
       <div class="row">
         <div style="flex:2"><label>Empresa</label><input name="empresa" placeholder="Nome da empresa" /></div>
-        <div style="flex:1"><label>Tipo</label><select name="produto"><option value="Movel">Móvel</option><option value="Fixo">Fixo</option></select></div>
+        <div style="flex:1"><label>Tipo</label><select name="produto"><option value="Movel">Vivo Móvel</option><option value="Fixo">Vivo Fixo</option><option value="Desktop">Desktop</option><option value="AONet">AONet</option><option value="Vero">Vero</option></select></div>
       </div>
       <div><label>CNPJ</label><input name="cnpj" placeholder="00.000.000/0000-00" /></div>
       <div class="row">
@@ -171,8 +171,8 @@ let CONTAS=[], SORT={k:'data_vencimento',dir:1};
 
 function prodTag(p){
   if(/^(desktop|aonet|vero)$/i.test(p||'')) return `<span class="tag t-outra">${p}</span>`;
-  if(/fixo/i.test(p||'')) return `<span class="tag t-fixo">Fixo</span>`;
-  if(/mov/i.test(p||'')) return `<span class="tag t-movel">Móvel</span>`;
+  if(/fixo/i.test(p||'')) return `<span class="tag t-fixo">Vivo Fixo</span>`;
+  if(/mov/i.test(p||'')) return `<span class="tag t-movel">Vivo Móvel</span>`;
   return `<span class="tag">—</span>`;
 }
 function tag(s){

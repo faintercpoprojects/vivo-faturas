@@ -182,6 +182,79 @@ async function coletarAonet(context, cnpj, pastaBase) {
   return resultado;
 }
 
-const COLETORES = { desktop: coletarDesktop, aonet: coletarAonet };
+// ---------------------------------------------------------------- Vero
+/**
+ * Minha Vero exige login (VERO_USUARIO / VERO_SENHA no .env). Usamos a mesma
+ * API que o site chama (a tela de login trava em navegador automatizado):
+ *   POST /cypher/auth/authenticate                    -> access_token
+ *   GET  /cypher/financeiro/<doc>/faturas             -> faturas (abertas e pagas)
+ *   GET  /cypher/veroapi/financeiro/fatura/<id>/exportar-pdf  -> PDF em base64
+ */
+const VERO_API = 'https://verointernet.com.br/cypher';
+
+async function coletarVero(_context, cnpj, pastaBase) {
+  const usuario = soDigitos(process.env.VERO_USUARIO);
+  const senha = process.env.VERO_SENHA || '';
+  if (!usuario || !senha) throw new Error('Vero: preencha VERO_USUARIO e VERO_SENHA no .env');
+  if (usuario !== soDigitos(cnpj)) return []; // o login da Vero é de outro documento
+
+  const auth = await fetch(`${VERO_API}/auth/authenticate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ username: usuario, password: senha }),
+  });
+  if (auth.status === 401) throw new Error('Vero: usuário e/ou senha inválidos (confira VERO_USUARIO/VERO_SENHA no .env)');
+  if (!auth.ok) throw new Error(`Vero: falha no login (HTTP ${auth.status})`);
+  const { access_token: token } = await auth.json();
+  const hdr = (crm) => ({ Authorization: `Bearer ${token}`, CRM: crm || 'todos', Accept: 'application/json' });
+
+  const r = await fetch(`${VERO_API}/financeiro/${usuario}/faturas`, { headers: hdr() });
+  if (!r.ok) throw new Error(`Vero: faturas não carregaram (HTTP ${r.status})`);
+  const faturas = await r.json();
+
+  const resultado = [];
+  for (const f of Array.isArray(faturas) ? faturas : []) {
+    const vencimento = f.dataVencimento || null;
+    const comp = competenciaDe(vencimento);
+    const paga = /pag|quit|baix/i.test(f.status || '');
+    let boletoPdfPath = null;
+    if (!paga && f.idFatura) {
+      try {
+        const p = await fetch(`${VERO_API}/veroapi/financeiro/fatura/${f.idFatura}/exportar-pdf`, { headers: hdr(f.crm) });
+        // A API devolve o PDF como lista de bytes em JSON ([37,80,68,70,...]);
+        // aceita também base64, caso mude.
+        const corpo = p.ok ? await p.json() : null;
+        const buf = Array.isArray(corpo) ? Buffer.from(corpo)
+          : typeof corpo === 'string' ? Buffer.from(corpo, 'base64') : null;
+        if (buf && buf.subarray(0, 4).toString() === '%PDF') {
+          const pasta = path.join(pastaBase, String(comp.ano || 'sem-data'), String(comp.mes || '').padStart(2, '0'));
+          fs.mkdirSync(pasta, { recursive: true });
+          boletoPdfPath = path.join(pasta, `Fatura-Vero-${f.idFatura}.pdf`);
+          fs.writeFileSync(boletoPdfPath, buf);
+        } else {
+          logger.warn(`Vero: PDF da fatura ${f.idFatura} não veio (HTTP ${p.status}).`);
+        }
+      } catch (e) {
+        logger.warn(`Vero: falha ao baixar o PDF da fatura ${f.idFatura}: ${e.message}`);
+      }
+    }
+    resultado.push({
+      produto: 'Vero',
+      linha: f.descricaoContrato || f.crm || 'Vero',
+      contrato: f.descricaoContrato || null,
+      numeroDocumento: f.idFatura ? String(f.idFatura) : null,
+      dataVencimento: vencimento,
+      valor: f.valorTotal != null ? Number(f.valorTotal) : f.valor != null ? Number(f.valor) : null,
+      statusPortal: /venc|atras/i.test(f.status || '') ? 'Atrasada' : statusDe({ paga, vencimento }),
+      linhaDigitavel: f.linhaDigitavel || f.codigoDeBarras || null,
+      pixCode: f.pixCopiaCola || null,
+      boletoPdfPath,
+      ...comp,
+    });
+  }
+  return resultado;
+}
+
+const COLETORES = { desktop: coletarDesktop, aonet: coletarAonet, vero: coletarVero };
 
 module.exports = { COLETORES, abrirNavegador, fmtCnpj, soDigitos, faturasDoSnapshot, statusDe };

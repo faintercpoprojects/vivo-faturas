@@ -24,7 +24,7 @@ const argv = process.argv.slice(2);
 const valor = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : null; };
 
 async function main() {
-  const operadoras = (process.env.OPERADORAS || 'desktop,aonet').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const operadoras = (process.env.OPERADORAS || 'desktop,aonet,vero').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   const cnpjs = (valor('--cnpj') || process.env.OPERADORAS_CNPJS || '68.165.786/0001-30')
     .split(',').map(soDigitos).filter((c) => c.length === 11 || c.length === 14);
 
