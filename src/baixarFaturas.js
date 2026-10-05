@@ -202,6 +202,39 @@ async function capturarDownload(page, acaoClicar, destino, timeoutMs) {
  * Ex.: "072026-0443307515-vivomovel-fatura.pdf"
  *      -> { ano:2026, mes:7, linha:'0443307515', produto:'Movel' }
  */
+/**
+ * Procura, na pasta do CNPJ, um PDF com o MESMO nome de arquivo (mesmo tipo e
+ * linha) em OUTRA competência e conteúdo idêntico ao baixado.
+ * @returns {Promise<string|null>} caminho do arquivo igual, ou null
+ */
+async function pdfIdenticoSalvo(tmp, destino) {
+  const crypto = require('crypto');
+  const md5 = async (f) => crypto.createHash('md5').update(await fsp.readFile(f)).digest('hex');
+  const nome = path.basename(destino);
+  const pastaCnpj = path.resolve(path.dirname(destino), '..', '..'); // <cnpj>/<ano>/<mes>/arquivo
+  let alvo;
+  try { alvo = await md5(tmp); } catch { return null; }
+  for (const ano of await fsp.readdir(pastaCnpj).catch(() => [])) {
+    for (const mes of await fsp.readdir(path.join(pastaCnpj, ano)).catch(() => [])) {
+      const f = path.join(pastaCnpj, ano, mes, nome);
+      if (path.resolve(f) === path.resolve(destino) || !existe(f)) continue;
+      if ((await md5(f).catch(() => null)) === alvo) return f;
+    }
+  }
+  return null;
+}
+
+/** Lê o "Vencimento dd/mm/aaaa" impresso no PDF. @returns {{ano,mes}|null} */
+async function vencimentoDoPdf(arquivo) {
+  try {
+    const { text } = await require('pdf-parse')(await fsp.readFile(arquivo));
+    const m = String(text).match(/vencimento\s*:?\s*(\d{2})\/(\d{2})\/(\d{4})/i);
+    return m ? { mes: Number(m[2]), ano: Number(m[3]) } : null;
+  } catch {
+    return null; // PDF digitalizado / ilegível
+  }
+}
+
 function metaDoNome(suggested, fallback = {}) {
   const nome = String(suggested || '').toLowerCase();
   const meta = { ...fallback };
@@ -463,6 +496,18 @@ async function baixarContasDoProduto(page, contrato, contas, rotulo, onDocumento
 
       const meta = metaDoNome(r.suggested, metaConta || {});
       if (!meta.ano || !meta.mes) {
+        // Nome sem competência (ex.: "document-<linha>-<data>.PDF"): usa o mês do
+        // VENCIMENTO impresso no PDF — mesmo critério das demais contas. Evita
+        // registrar uma fatura antiga (o portal às vezes reentrega a anterior com
+        // nome novo) como se fosse a do mês corrente.
+        const venc = await vencimentoDoPdf(tmp);
+        if (venc) {
+          meta.ano = meta.ano || venc.ano;
+          meta.mes = meta.mes || venc.mes;
+          logger.info(`${contrato.cnpjFormatado} conta ${i}: competência lida do PDF (vencimento) — ${pad2(meta.mes)}/${meta.ano}.`);
+        }
+      }
+      if (!meta.ano || !meta.mes) {
         meta.ano = meta.ano || hoje.getFullYear();
         meta.mes = meta.mes || hoje.getMonth() + 1;
         logger.warn(`${contrato.cnpjFormatado} conta ${i}: competência indefinida no nome "${r.suggested}", usando ${meta.ano}/${pad2(meta.mes)}.`);
@@ -477,6 +522,16 @@ async function baixarContasDoProduto(page, contrato, contas, rotulo, onDocumento
         mes: meta.mes,
         arquivo: `${d.tipo}-${prod}${sufixoLinha}.pdf`,
       });
+
+      // O portal às vezes reentrega uma fatura antiga com nome novo: se o PDF é
+      // idêntico a outro já salvo desta mesma linha (em outra competência),
+      // é a mesma fatura — não registra de novo.
+      const repetida = await pdfIdenticoSalvo(tmp, destino);
+      if (repetida) {
+        logger.info(`${contrato.cnpjFormatado} conta ${i}: ${d.tipo} igual à já salva em ${path.relative(config.paths.downloads, repetida)} — ignorada (não é fatura nova).`);
+        await fsp.unlink(tmp).catch(() => {});
+        continue;
+      }
 
       if (existe(destino)) {
         logger.debug(`Já existe localmente, sobrescrevendo staging: ${path.basename(destino)}`);
