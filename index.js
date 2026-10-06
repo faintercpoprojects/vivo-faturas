@@ -253,6 +253,8 @@ async function processarContrato(page, contrato, manifest, barra) {
             competencia: doc.competencia ? `${pad2(doc.competencia.mes)}/${doc.competencia.ano}` : null,
             valor: doc.valor != null ? doc.valor : null,
             dataVencimento: doc.dataVencimento || null,
+            mesReferencia: doc.mesReferencia || null,
+            qtdIguais: doc.qtdIguais || 1,
             status: doc.statusPortal || 'Paga',
           });
           if (r.atualizada) stats.contasAtualizadas++;

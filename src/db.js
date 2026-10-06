@@ -235,6 +235,26 @@ function atualizarStatusPortal(d) {
     `).run(novo, agora(), d.cnpj, d.produto, d.dataVencimento, d.valor, novo);
     if (r.changes > 0) return { atualizada: true };
   }
+  // 3) Vivo Fixo (layout atual): o card só traz o MÊS de referência. A conta
+  //    vence nesse mês ou no seguinte; casa por valor nessa janela. Se houver
+  //    mais candidatas que cards iguais pagos, não arrisca.
+  if (d.valor != null && d.mesReferencia && d.mesReferencia.ano && d.mesReferencia.mes) {
+    const { ano, mes } = d.mesReferencia;
+    const ini = `${ano}-${String(mes).padStart(2, '0')}-01`;
+    const fimD = new Date(Date.UTC(ano, mes + 1, 0)); // último dia do mês seguinte
+    const fim = fimD.toISOString().slice(0, 10);
+    const cands = db.prepare(`
+      SELECT id, status_portal FROM contas
+      WHERE cnpj = ? AND produto = ? AND ROUND(valor_original, 2) = ROUND(?, 2)
+        AND data_vencimento BETWEEN ? AND ?
+    `).all(d.cnpj, d.produto, d.valor, ini, fim);
+    const pendentes = cands.filter((c) => c.status_portal !== novo);
+    if (pendentes.length && cands.length <= (d.qtdIguais || 1)) {
+      const up = db.prepare('UPDATE contas SET status_portal = ?, updated_at = ? WHERE id = ?');
+      for (const c of pendentes) up.run(novo, agora(), c.id);
+      return { atualizada: true };
+    }
+  }
   return { atualizada: false };
 }
 

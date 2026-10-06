@@ -17,6 +17,7 @@ const {
 } = require('./utils');
 const shadow = require('./shadow');
 const { isoData, numero } = require('./extrairCampos');
+const { lerCardsFixoNaPagina } = require('./cardsFixo');
 
 const INVOICES = 'https://mve.vivo.com.br/sec/invoices';
 
@@ -229,7 +230,7 @@ async function vencimentoDoPdf(arquivo) {
   try {
     const { text } = await require('pdf-parse')(await fsp.readFile(arquivo));
     const m = String(text).match(/vencimento\s*:?\s*(\d{2})\/(\d{2})\/(\d{4})/i);
-    return m ? { mes: Number(m[2]), ano: Number(m[3]) } : null;
+    return m ? { mes: Number(m[2]), ano: Number(m[3]), iso: `${m[3]}-${m[2]}-${m[1]}` } : null;
   } catch {
     return null; // PDF digitalizado / ilegível
   }
@@ -645,21 +646,30 @@ async function baixarFixo(page, contrato, onDocumento) {
   // Obs.: no modo status o Fixo também passa por aqui — o Fixo só expõe os
   // dados de forma confiável pelo boleto, então mantemos o fluxo normal
   // (as pagas continuam sem baixar o boleto, só atualizando o status).
-  const cards = await lerCardsFixo(page);
+  // Layout atual (out/2026): status + mês/ano no card. Se não achar nada,
+  // tenta o leitor antigo (valor + data completa no mesmo texto).
+  let cards = await page.evaluate(lerCardsFixoNaPagina).catch(() => []);
+  if (!cards.length) cards = await lerCardsFixo(page);
 
   // Contas PAGAS: não baixa boleto; só sinaliza a atualização de status.
+  // Mesma (valor, mês) repetida -> informa quantas, para o banco só marcar
+  // como paga quando todas as iguais estiverem pagas.
+  const iguais = (c) => cards.filter((x) => x.paga && x.valor === c.valor && x.mes === c.mes && x.ano === c.ano).length;
   let pagasIgnoradas = 0;
   for (const c of cards) {
     if (!c.paga) continue;
     pagasIgnoradas++;
-    logger.info(`  • Vivo Fixo: conta PAGA R$ ${c.valor} venc ${c.vencimento} — boleto ignorado, só atualiza status.`);
+    const quando = c.vencimento ? `venc ${c.vencimento}` : `ref. ${pad2(c.mes)}/${c.ano}`;
+    logger.info(`  • Vivo Fixo: conta PAGA R$ ${c.valor} ${quando} — boleto ignorado, só atualiza status.`);
     await onDocumento({
       apenasStatus: true,
       produto: 'Fixo',
       pagaPortal: true,
       statusPortal: 'Paga',
       valor: numero(c.valor),
-      dataVencimento: isoData(c.vencimento),
+      dataVencimento: c.vencimento ? isoData(c.vencimento) : null,
+      mesReferencia: c.ano && c.mes ? { ano: c.ano, mes: c.mes } : null,
+      qtdIguais: iguais(c),
     });
   }
 
@@ -670,15 +680,22 @@ async function baixarFixo(page, contrato, onDocumento) {
     return { contas: pagasIgnoradas, boletos: 0, pagasIgnoradas };
   }
   const ys = await ysBaixarAgora(page);
-  logger.info(`${contrato.cnpjFormatado} [Vivo Fixo]: ${n} conta(s) a baixar — baixando boletos.`);
+  // No layout atual TODO card tem "Baixar agora" (inclusive os pagos).
+  const cardDoBotao = (i) => (cards.length === n ? cards[i] : (ys[i] != null ? maisProximo(cards, ys[i]) : null));
+  const aBaixar = [...Array(n).keys()].filter((i) => { const c = cardDoBotao(i); return !(c && c.paga); });
+  if (!aBaixar.length) {
+    logger.info(`${contrato.cnpjFormatado} [Vivo Fixo]: nenhuma conta em aberto nesta página.`);
+    return { contas: pagasIgnoradas, boletos: 0, pagasIgnoradas };
+  }
+  logger.info(`${contrato.cnpjFormatado} [Vivo Fixo]: ${aBaixar.length} conta(s) a baixar — baixando boletos.`);
 
   const hoje = new Date();
   let boletos = 0;
 
-  for (let i = 0; i < n; i++) {
-    // Pareamento: se há exatamente 1 card (não pago) por botão, casa por índice
-    // (ambos de cima para baixo — mais confiável); senão, pelo Y mais próximo.
-    const card = cardsPend.length === n ? cardsPend[i] : (ys[i] != null ? maisProximo(cardsPend, ys[i]) : cardsPend[i]);
+  for (const i of aBaixar) {
+    // Pareamento botão -> card: por índice quando há 1 card por botão;
+    // senão, pelo Y mais próximo (só entre os não pagos).
+    const card = cardDoBotao(i) || (ys[i] != null ? maisProximo(cardsPend, ys[i]) : cardsPend[i]);
     const tmp = path.join(config.paths.downloads, '_tmp', `${contrato.cnpj}-fixo-${i}-${Date.now()}.pdf`);
 
     const r = await capturarDownload(
@@ -705,10 +722,12 @@ async function baixarFixo(page, contrato, onDocumento) {
       continue;
     }
 
-    // Competência/ano/mês a partir do vencimento; linha/nº do nome sugerido.
-    const [, mm, yy] = (card && card.vencimento ? card.vencimento : `01/01/${hoje.getFullYear()}`).split('/');
-    const ano = Number(yy) || hoje.getFullYear();
-    const mes = Number(mm) || hoje.getMonth() + 1;
+    // Competência = mês do vencimento: do card (layout antigo) ou impresso no
+    // boleto (layout atual); por último, o mês/ano do card.
+    const vencPdf = card && card.vencimento ? null : await vencimentoDoPdf(tmp);
+    const vencIso = card && card.vencimento ? isoData(card.vencimento) : vencPdf ? vencPdf.iso : null;
+    const ano = vencIso ? Number(vencIso.slice(0, 4)) : (card && card.ano) || hoje.getFullYear();
+    const mes = vencIso ? Number(vencIso.slice(5, 7)) : (card && card.mes) || hoje.getMonth() + 1;
     const numDoc = (String(r.suggested || '').match(/(\d{6,})/) || [])[1] || null;
     const linha = numDoc || `fixo-${i}`;
 
@@ -725,7 +744,7 @@ async function baixarFixo(page, contrato, onDocumento) {
     }
     boletos++;
 
-    logger.info(`  ✓ Boleto Fixo ${pad2(mes)}/${ano} ${card ? 'R$ ' + card.valor + ' venc ' + card.vencimento : ''} -> ${path.relative(config.paths.downloads, destino)}`);
+    logger.info(`  ✓ Boleto Fixo ${pad2(mes)}/${ano} ${card ? 'R$ ' + card.valor : ''}${vencIso ? ' venc ' + vencIso.split('-').reverse().join('/') : ''} -> ${path.relative(config.paths.downloads, destino)}`);
 
     await onDocumento({
       tipo: 'Boleto',
@@ -737,11 +756,11 @@ async function baixarFixo(page, contrato, onDocumento) {
       statusPortal: card ? card.status : 'Pendente',
       pagaPortal: false,
       valor: card ? numero(card.valor) : null,
-      dataVencimento: card ? isoData(card.vencimento) : null,
+      dataVencimento: vencIso,
       competencia: { ano, mes },
     });
   }
-  return { contas: n + pagasIgnoradas, boletos, pagasIgnoradas };
+  return { contas: aBaixar.length + pagasIgnoradas, boletos, pagasIgnoradas };
 }
 
 /**
