@@ -420,21 +420,14 @@ function filtradas(){
   return rows;
 }
 
-// Documentos: fatura e boleto em PDF quando houver; senão, copiar código / Pix.
+// Documentos (só para controle das notas): fatura e boleto em PDF quando houver.
+// O pagamento não é feito pela plataforma, então não há "copiar código / Pix".
 function docsCel(c){
   const out=[];
   if(c.pdf_baixado) out.push(`<a class="chip" href="/api/contas/${c.id}/fatura" target="_blank">Fatura</a>`);
-  if(c.boleto_pdf_path||c.boleto_drive_link||(c.boleto_disponivel&&!c.linha_digitavel)) out.push(`<a class="chip" href="/api/contas/${c.id}/boleto" target="_blank">Boleto</a>`);
-  if(c.linha_digitavel) out.push(`<button class="chip" title="Copiar linha digitável" onclick="copiar(${c.id},'linha_digitavel')">Código</button>`);
-  if(c.pix_code) out.push(`<button class="chip" title="Copiar Pix copia e cola" onclick="copiar(${c.id},'pix_code')">Pix</button>`);
+  if(c.boleto_pdf_path||c.boleto_drive_link) out.push(`<a class="chip" href="/api/contas/${c.id}/boleto" target="_blank">Boleto</a>`);
   return out.length?`<div class="docs">${out.join('')}</div>`:'<span class="faint">—</span>';
 }
-window.copiar=async(id,campo)=>{
-  const v=(CONTAS.find(x=>x.id===id)||{})[campo]; if(!v) return;
-  try{ await navigator.clipboard.writeText(v); }
-  catch{ const t=document.createElement('textarea'); t.value=v; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove(); }
-  toast(campo==='pix_code'?'Pix copia e cola copiado':'Linha digitável copiada');
-};
 
 function render(){
   const rows=filtradas();
