@@ -64,7 +64,14 @@ function relevante(c) {
 }
 
 const app = express();
+app.disable('x-powered-by');
 app.use(express.json());
+
+// ---- Login (um usuário por pessoa) — protege TUDO abaixo, inclusive os PDFs.
+const { criarAuth } = require('./auth');
+const auth = criarAuth({ dbFile: DB_FILE, segredo: process.env.SESSION_SECRET });
+app.use(auth.exigirLogin);
+auth.rotas(app);
 
 // ---- API ------------------------------------------------------------------
 
@@ -124,8 +131,11 @@ app.patch('/api/contas/:id', (req, res) => {
     const vals = campos.map((c) => req.body[c]);
     vals.push(new Date().toISOString(), Number(req.params.id));
     d.prepare(`UPDATE contas SET ${set} WHERE id = ?`).run(...vals);
-    const row = d.prepare(`SELECT * FROM contas WHERE id = ?`).get(Number(req.params.id));
     d.close();
+    auth.registrar(req, Number(req.params.id), 'editar', Object.fromEntries(campos.map((c) => [c, req.body[c]])));
+    const d2 = db();
+    const row = d2.prepare(`SELECT * FROM contas WHERE id = ?`).get(Number(req.params.id));
+    d2.close();
     res.json({ ...row, situacao: situacao(row) });
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -136,8 +146,10 @@ app.patch('/api/contas/:id', (req, res) => {
 app.delete('/api/contas/:id', (req, res) => {
   try {
     const d = db();
+    const antes = d.prepare(`SELECT empresa, produto, linha, competencia, data_vencimento, valor_original FROM contas WHERE id = ?`).get(Number(req.params.id));
     const r = d.prepare(`DELETE FROM contas WHERE id = ?`).run(Number(req.params.id));
     d.close();
+    if (r.changes) auth.registrar(req, Number(req.params.id), 'excluir', antes);
     res.json({ ok: true, removidas: r.changes });
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -168,9 +180,25 @@ app.post('/api/contas', (req, res) => {
       b.valor_original != null && b.valor_original !== '' ? Number(b.valor_original) : null,
       b.observacoes || null, agora, agora
     );
-    const row = d.prepare(`SELECT * FROM contas WHERE id = ?`).get(Number(info.lastInsertRowid));
     d.close();
+    auth.registrar(req, Number(info.lastInsertRowid), 'criar', { empresa: b.empresa, valor: b.valor_original, vencimento: b.data_vencimento });
+    const d2 = db();
+    const row = d2.prepare(`SELECT * FROM contas WHERE id = ?`).get(Number(info.lastInsertRowid));
+    d2.close();
     res.json({ ...row, situacao: situacao(row) });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// Histórico de alterações de uma conta (quem e quando).
+app.get('/api/contas/:id/historico', (req, res) => {
+  try {
+    const d = db();
+    let rows = [];
+    try { rows = d.prepare(`SELECT usuario, acao, detalhes, em FROM historico WHERE conta_id = ? ORDER BY id DESC LIMIT 50`).all(Number(req.params.id)); } catch { /* sem tabela */ }
+    d.close();
+    res.json(rows.map((r) => ({ ...r, detalhes: r.detalhes ? JSON.parse(r.detalhes) : null })));
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
@@ -252,6 +280,7 @@ app.post('/api/run', (req, res) => {
   if (rodando) return res.json({ ok: true, jaRodando: true, modo: modoAtual });
   const modo = (req.query.modo || (req.body && req.body.modo) || '').toString();
   iniciarColeta(modo);
+  auth.registrar(req, null, modo === 'status' ? 'atualizar-status' : 'baixar-contas');
   res.json({ ok: true, iniciado: true, modo: modoAtual });
 });
 app.get('/api/run/status', (req, res) => {

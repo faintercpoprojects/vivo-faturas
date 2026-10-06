@@ -117,6 +117,22 @@
   dialog .row>*{flex:1;min-width:0}
   dialog .ft{padding:14px 20px;display:flex;justify-content:flex-end;gap:8px;border-top:1px solid var(--line)}
 
+  .hidden{display:none!important}
+  .usuario{position:relative}
+  .menu{position:absolute;right:0;top:calc(100% + 6px);min-width:200px;background:var(--surface-2);border:1px solid var(--line-2);border-radius:11px;padding:6px;box-shadow:0 14px 34px rgba(0,0,0,.45);z-index:20}
+  .menu .quem{padding:8px 10px 10px;border-bottom:1px solid var(--line);margin-bottom:4px;font-size:12px;color:var(--faint)}
+  .menu .quem b{display:block;color:var(--text);font-size:13px;font-weight:600}
+  .menu button{width:100%;justify-content:flex-start;border:0;background:transparent;color:var(--muted);padding:8px 10px}
+  .menu button:hover{background:var(--surface);color:var(--text)}
+  .usuarios{display:grid;gap:6px;max-height:300px;overflow:auto}
+  .usr{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;font-size:13px}
+  .usr .n{flex:1;min-width:0}
+  .usr .n span{display:block;font-size:12px;color:var(--faint)}
+  .usr .tag{font-size:11px;color:var(--accent);background:var(--blue-bg);border-radius:6px;padding:1px 6px;margin-left:6px}
+  .usr .off{color:var(--red);background:var(--red-bg)}
+  .senha-temp{background:var(--bg);border:1px dashed var(--line-2);border-radius:10px;padding:12px;font-size:13px}
+  .senha-temp code{font-size:16px;color:var(--text);letter-spacing:.04em;user-select:all}
+  .erro-form{font-size:12.5px;color:var(--red)}
   .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--surface-2);border:1px solid var(--line-2);color:var(--text);padding:10px 16px;border-radius:10px;font-size:13px;z-index:50;box-shadow:0 10px 30px rgba(0,0,0,.4)}
 
   @media (max-width:1100px){ .kpis{grid-template-columns:repeat(2,minmax(0,1fr))} .kpis .lista{grid-column:1/-1} }
@@ -148,7 +164,15 @@
     <a class="btn fantasma" id="btnDrive" href="#" target="_blank" rel="noopener"><svg class="ic"><use href="#i-pasta"/></svg>Drive</a>
     <button id="btnStatus" title="Só lê Paga/Pendente/Atrasada nos portais — rápido, sem baixar boletos"><svg class="ic"><use href="#i-sync"/></svg>Atualizar status</button>
     <button class="primario" id="btnRun" title="Baixa faturas e boletos dos portais (Vivo, Desktop, AONet, Vero)"><svg class="ic"><use href="#i-down"/></svg>Baixar contas</button>
-    <button class="fantasma hidden" id="btnSair" title="Sair" style="display:none"><svg class="ic"><use href="#i-sair"/></svg></button>
+    <div class="usuario">
+      <button class="fantasma" id="btnUsuario" aria-haspopup="true" aria-expanded="false"><span id="nomeUsuario">…</span> <span aria-hidden="true">▾</span></button>
+      <div class="menu hidden" id="menuUsuario" role="menu">
+        <div class="quem"><b id="menuNome"></b><span id="menuLogin"></span></div>
+        <button id="mSenha" role="menuitem">Trocar senha</button>
+        <button id="mUsuarios" role="menuitem" class="hidden">Usuários</button>
+        <button id="mSair" role="menuitem"><svg class="ic"><use href="#i-sair"/></svg>Sair</button>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -239,7 +263,50 @@
   </form>
 </dialog>
 
+<dialog id="dlgSenha">
+  <form id="frmSenha">
+    <div class="hd">Trocar senha</div>
+    <div class="sub" id="senhaAviso">Mínimo de 10 caracteres, com letras e números.</div>
+    <div class="bd">
+      <div><label>Senha atual</label><input name="atual" type="password" autocomplete="current-password" required /></div>
+      <div><label>Nova senha</label><input name="nova" type="password" autocomplete="new-password" minlength="10" required /></div>
+      <div><label>Repita a nova senha</label><input name="nova2" type="password" autocomplete="new-password" minlength="10" required /></div>
+      <div class="erro-form" id="senhaErro"></div>
+    </div>
+    <div class="ft">
+      <button type="button" class="fantasma" id="senhaCancelar">Cancelar</button>
+      <button type="submit" class="primario">Salvar senha</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgUsuarios" style="width:min(520px,calc(100vw - 32px))">
+  <div class="hd">Usuários</div>
+  <div class="sub">Cada pessoa entra com o próprio usuário. Novos usuários recebem uma senha temporária e trocam no primeiro acesso.</div>
+  <div class="bd">
+    <div class="usuarios" id="listaUsuarios"></div>
+    <form id="frmNovoUsuario" class="row" style="align-items:flex-end;flex-wrap:wrap">
+      <div><label>Nome</label><input name="nome" required placeholder="ex.: Maria Souza" /></div>
+      <div><label>Usuário</label><input name="usuario" required placeholder="ex.: maria" autocapitalize="off" spellcheck="false" /></div>
+      <div style="flex:0 0 auto"><label style="display:flex;gap:6px;align-items:center;margin-bottom:9px"><input type="checkbox" name="admin" style="width:auto" /> admin</label></div>
+      <div style="flex:0 0 auto"><button type="submit" class="primario">Adicionar</button></div>
+    </form>
+    <div class="erro-form" id="usuariosErro"></div>
+    <div id="senhaTemp"></div>
+  </div>
+  <div class="ft"><button type="button" class="fantasma" id="usuariosFechar">Fechar</button></div>
+</dialog>
+
 <script>
+// Sessão: sem login -> tela de login; senha temporária -> obriga a trocar.
+const _fetch = window.fetch.bind(window);
+window.fetch = async (...a) => {
+  const r = await _fetch(...a);
+  if (r.status === 401) { location.href = '/login.html'; throw new Error('sessão expirada'); }
+  if (r.status === 403) { const j = await r.clone().json().catch(()=>({})); if (j.trocarSenha) abrirSenha(true); }
+  return r;
+};
+let EU = null;
 const $ = (s,e=document)=>e.querySelector(s);
 const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money = v => v==null ? '—' : 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -363,7 +430,7 @@ function render(){
       <td class="op">${esc(opNome(c.produto))}</td>
       <td class="r num valor">${money(c.valor_original)}</td>
       <td>${docsCel(c)}</td>
-      <td class="interno">${pago?`<b>${esc(c.status_interno)}</b>`:esc(c.status_interno||'Em aberto')}${c.valor_pago?` <span class="faint num">· ${money(c.valor_pago)}</span>`:''}</td>
+      <td class="interno">${pago?`<b>${esc(c.status_interno)}</b>`:esc(c.status_interno||'Em aberto')}${c.valor_pago?` <span class="faint num">· ${money(c.valor_pago)}</span>`:''}${c.alterado_por?`<div class="faint" style="font-size:11.5px">por ${esc(c.alterado_por)}</div>`:''}</td>
       <td><div class="acoes">
         <button class="icone" title="Registrar pagamento" onclick="abrirModal(${c.id})"><svg class="ic"><use href="#i-check"/></svg></button>
         <button class="icone perigo" title="Excluir do dashboard" onclick="excluirConta(${c.id})"><svg class="ic"><use href="#i-lixo"/></svg></button>
@@ -444,8 +511,78 @@ fetch('/api/config').then(r=>r.json()).then(cfg=>{
   else { b.style.display='none'; }
 }).catch(()=>{});
 
-carregar();
-setInterval(carregar, 60000); // atualiza a cada minuto
+// ---- menu do usuário
+const menu=$('#menuUsuario');
+$('#btnUsuario').onclick=(e)=>{ e.stopPropagation(); const abrir=menu.classList.contains('hidden'); menu.classList.toggle('hidden',!abrir); $('#btnUsuario').setAttribute('aria-expanded',abrir); };
+document.addEventListener('click',(e)=>{ if(!menu.contains(e.target)) menu.classList.add('hidden'); });
+$('#mSair').onclick=async()=>{ await _fetch('/api/logout',{method:'POST'}); location.href='/login.html'; };
+
+// ---- trocar senha
+let senhaObrigatoria=false;
+function abrirSenha(obrigatoria=false){
+  senhaObrigatoria=obrigatoria; menu.classList.add('hidden');
+  $('#frmSenha').reset(); $('#senhaErro').textContent='';
+  $('#senhaAviso').textContent = obrigatoria ? 'Você entrou com uma senha temporária. Crie a sua senha para continuar (mín. 10 caracteres, letras e números).' : 'Mínimo de 10 caracteres, com letras e números.';
+  $('#senhaCancelar').classList.toggle('hidden',obrigatoria);
+  if(!$('#dlgSenha').open) $('#dlgSenha').showModal();
+}
+$('#mSenha').onclick=()=>abrirSenha(false);
+$('#senhaCancelar').onclick=()=>$('#dlgSenha').close();
+$('#dlgSenha').addEventListener('cancel',e=>{ if(senhaObrigatoria) e.preventDefault(); });
+$('#frmSenha').addEventListener('submit',async e=>{
+  e.preventDefault(); const f=e.target;
+  if(f.nova.value!==f.nova2.value){ $('#senhaErro').textContent='As senhas não conferem.'; return; }
+  const r=await fetch('/api/senha',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({atual:f.atual.value,nova:f.nova.value})});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){ $('#senhaErro').textContent=j.erro||'Não foi possível trocar a senha.'; return; }
+  $('#dlgSenha').close(); toast('Senha alterada');
+  if(senhaObrigatoria){ senhaObrigatoria=false; history.replaceState(null,'','/'); carregar(); }
+});
+
+// ---- usuários (administradores)
+async function listarUsuarios(){
+  const lista=await fetch('/api/usuarios').then(r=>r.json());
+  $('#listaUsuarios').innerHTML=lista.map(u=>`<div class="usr">
+    <div class="n">${esc(u.nome)}${u.admin?'<span class="tag">admin</span>':''}${u.ativo?'':'<span class="tag off">desativado</span>'}
+      <span>${esc(u.usuario)} · ${u.ultimo_login?'último acesso '+new Date(u.ultimo_login).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}):'nunca entrou'}</span></div>
+    ${u.id===EU.id?'<span class="faint" style="font-size:12px">você</span>':`
+      <button class="chip" onclick="redefinir(${u.id},'${esc(u.nome)}')">Redefinir senha</button>
+      <button class="chip" onclick="alternarAtivo(${u.id},${!u.ativo})">${u.ativo?'Desativar':'Reativar'}</button>`}
+  </div>`).join('');
+}
+function mostrarSenhaTemp(nome,usuario,senha){
+  $('#senhaTemp').innerHTML=`<div class="senha-temp">Senha temporária de <b>${esc(nome)}</b> (usuário <b>${esc(usuario)}</b>):<br><code>${esc(senha)}</code><br><span class="faint">Ela aparece só agora. Passe para a pessoa por um canal privado; no primeiro acesso ela cria a própria senha.</span></div>`;
+}
+$('#mUsuarios').onclick=async()=>{ menu.classList.add('hidden'); $('#senhaTemp').innerHTML=''; $('#usuariosErro').textContent=''; await listarUsuarios(); $('#dlgUsuarios').showModal(); };
+$('#usuariosFechar').onclick=()=>{ $('#senhaTemp').innerHTML=''; $('#dlgUsuarios').close(); };
+$('#frmNovoUsuario').addEventListener('submit',async e=>{
+  e.preventDefault(); const f=e.target; $('#usuariosErro').textContent='';
+  const r=await fetch('/api/usuarios',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome:f.nome.value,usuario:f.usuario.value,admin:f.admin.checked})});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){ $('#usuariosErro').textContent=j.erro||'Não foi possível adicionar.'; return; }
+  mostrarSenhaTemp(f.nome.value,j.usuario,j.senhaTemporaria); f.reset(); listarUsuarios();
+});
+window.redefinir=async(id,nome)=>{
+  if(!confirm(`Gerar uma nova senha temporária para ${nome}? A senha atual dele(a) deixa de funcionar.`)) return;
+  const j=await fetch(`/api/usuarios/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({redefinirSenha:true})}).then(r=>r.json());
+  const u=(await fetch('/api/usuarios').then(r=>r.json())).find(x=>x.id===id);
+  mostrarSenhaTemp(nome,u?u.usuario:'',j.senhaTemporaria); listarUsuarios();
+};
+window.alternarAtivo=async(id,ativo)=>{
+  const r=await fetch(`/api/usuarios/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({ativo})});
+  if(!r.ok){ const j=await r.json().catch(()=>({})); $('#usuariosErro').textContent=j.erro||'Erro'; }
+  listarUsuarios();
+};
+
+(async()=>{
+  EU = await fetch('/api/me').then(r=>r.json());
+  $('#nomeUsuario').textContent = EU.nome.split(' ')[0];
+  $('#menuNome').textContent = EU.nome; $('#menuLogin').textContent = EU.usuario + (EU.admin?' · administrador':'');
+  $('#mUsuarios').classList.toggle('hidden',!EU.admin);
+  if(EU.deveTrocarSenha){ abrirSenha(true); return; }
+  carregar();
+  setInterval(()=>{ if(!senhaObrigatoria) carregar(); }, 60000); // atualiza a cada minuto
+})();
 </script>
 </body>
 </html>
