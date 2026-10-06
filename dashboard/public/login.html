@@ -84,10 +84,12 @@ const TOKEN = (location.hash.match(/^#redefinir=([\w-]+)/)||[])[1] || null;
     return;
   }
   if(st.logado) return entrar();
-  if(st.esqueci){
+  // Versão online: "Esqueci minha senha" sempre visível (se faltar configuração, o pedido avisa).
+  if(st.nuvem || st.esqueci){
     $('#dicaEsqueci').innerHTML='<button type="button" class="link" id="lnkEsqueci">Esqueci minha senha</button>';
     $('#lnkEsqueci').onclick=()=>{ msg(''); $('#sub').textContent='Enviaremos um link para o e-mail cadastrado.'; mostrar('frmEsqueci'); $('#ei').value=$('#u').value; $('#ei').focus(); };
   }
+  if(st.configurando) msg('O dashboard online está terminando de ser configurado. Se o login não funcionar, tente mais tarde.','info');
   if(st.semUsuarios){
     if(st.nuvem){
       $('#sub').textContent='Dashboard online ainda sem usuários.';

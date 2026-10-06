@@ -80,8 +80,14 @@ module.exports = async function handler(req, res) {
 
     // ---- rotas sem login
     if (rota === 'sessao' && metodo === 'GET') {
-      const n = Number((await um('SELECT COUNT(*)::int AS n FROM usuarios')).n);
-      return json(res, 200, { logado: !!(await A.usuarioDaSessao(req)), semUsuarios: n === 0, local: false, nuvem: true, esqueci: E.configurado() });
+      try {
+        const n = Number((await um('SELECT COUNT(*)::int AS n FROM usuarios')).n);
+        return json(res, 200, { logado: !!(await A.usuarioDaSessao(req)), semUsuarios: n === 0, local: false, nuvem: true, esqueci: E.configurado() });
+      } catch (e) {
+        // Banco ainda não conectado: a tela de login abre normalmente e avisa.
+        console.error('sessao:', e.message);
+        return json(res, 200, { logado: false, semUsuarios: false, local: false, nuvem: true, esqueci: E.configurado(), configurando: true });
+      }
     }
     if (rota === 'primeiro-acesso') {
       return json(res, 403, { erro: 'Na versão online, o primeiro administrador é criado no computador do escritório: node scripts/nuvem.js admin' });
@@ -298,6 +304,9 @@ module.exports = async function handler(req, res) {
     return json(res, 404, { erro: 'rota não encontrada' });
   } catch (e) {
     console.error('api:', e);
+    if (/DATABASE_URL|connect|ECONNREFUSED|ENOTFOUND|password authentication/i.test(String(e && e.message))) {
+      return json(res, 503, { erro: 'O dashboard online ainda está sendo configurado (banco de dados). Tente novamente mais tarde.' });
+    }
     return json(res, 500, { erro: 'erro interno' });
   }
 };
