@@ -239,7 +239,12 @@ let modoAtual = null;
 let inicioAtual = null;
 let ultimoResultado = null; // { modo, inicio, fim, codigo, ok }
 
-function iniciarColeta(modo) {
+// Dashboard na nuvem (Vercel): depois de cada coleta, envia os dados; e
+// executa os pedidos feitos pelos botões do dashboard online.
+const nuvem = require('../src/nuvem');
+const NUVEM = nuvem.ativo();
+
+function iniciarColeta(modo, aoTerminar) {
   if (rodando) return false;
   modo = modo === 'status' ? 'status' : 'completo';
   const args = modo === 'status'
@@ -261,6 +266,11 @@ function iniciarColeta(modo) {
 `); fs.closeSync(out); } catch { /* ignore */ }
     rodando = false; modoAtual = null; inicioAtual = null;
     console.log(`Coleta (${modo}) finalizada — exit ${codigo}`);
+    const depois = NUVEM
+      ? nuvem.registrarColeta(codigo).then(() => nuvem.enviar({ log: console.log }))
+      : Promise.resolve();
+    depois.catch((e) => console.error('Nuvem: falha ao enviar:', e.message))
+      .finally(() => { if (aoTerminar) Promise.resolve(aoTerminar(codigo)).catch(() => {}); });
   };
   const proxima = (i) => {
     if (i >= etapas.length) return fim(pior);
@@ -300,6 +310,11 @@ app.get('/api/config', (req, res) => {
 });
 
 // ---- estático -------------------------------------------------------------
+// Com NUVEM_URL no .env, quem abre o dashboard local vai para o link online
+// (os dados e o login passam a ficar lá). A API local continua funcionando.
+if (process.env.NUVEM_URL) {
+  app.get(['/', '/index.html', '/login.html'], (req, res) => res.redirect(process.env.NUVEM_URL));
+}
 app.use(express.static(path.join(__dirname, 'public')));
 
 // IPs IPv4 da máquina na rede local (para mostrar a URL de acesso dos colegas).
@@ -325,5 +340,18 @@ app.listen(PORT, '0.0.0.0', () => {
   // faz só a leitura rápida de status.
   if (!/^(false|0|nao|não)$/i.test(process.env.AUTO_SYNC || '')) {
     iniciarColeta(process.env.AUTO_SYNC_MODO || 'completo');
+  }
+  if (NUVEM) {
+    (async () => {
+      try {
+        await nuvem.esquema();
+        await nuvem.migrarUsuarios({ log: console.log });
+        if (!rodando) await nuvem.enviar({ log: console.log });
+      } catch (e) {
+        console.error('Nuvem: falha na preparação:', e.message);
+      }
+      nuvem.iniciarAgente({ iniciarColeta, rodando: () => rodando, log: console.log });
+      console.log('Nuvem: agente ativo (envia dados e atende os pedidos do dashboard online).');
+    })();
   }
 });

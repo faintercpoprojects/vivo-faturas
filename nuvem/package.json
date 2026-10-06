@@ -1,0 +1,20 @@
+{
+  "name": "contas-a-pagar-nuvem",
+  "private": true,
+  "description": "Dashboard Contas a Pagar na Vercel (dados no Postgres, enviados pelo computador do escritório)",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node test/teste-nuvem.js",
+    "dev": "node test/servidor-local.js",
+    "copiar-telas": "node -e \"for(const f of ['index.html','login.html'])require('fs').copyFileSync('../dashboard/public/'+f,'public/'+f)\""
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.0"
+  }
+}

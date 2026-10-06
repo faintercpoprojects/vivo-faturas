@@ -62,7 +62,10 @@ const entrar=(u)=>{ location.href = u && u.deveTrocarSenha ? '/?trocarSenha=1' :
   const st = await fetch('/api/sessao').then(r=>r.json()).catch(()=>({}));
   if(st.logado) return entrar();
   if(st.semUsuarios){
-    if(st.local){
+    if(st.nuvem){
+      $('#sub').textContent='Dashboard online ainda sem usuários.';
+      msg('Crie o primeiro administrador no computador do escritório: node scripts/nuvem.js admin <usuario> <Nome>. Quem já tinha usuário no dashboard local entra com o mesmo login.','info');
+    } else if(st.local){
       $('#sub').textContent='Primeiro acesso: crie o usuário administrador.';
       $('#frmPrimeiro').classList.remove('hidden'); $('#pn').focus();
     } else {

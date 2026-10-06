@@ -25,6 +25,7 @@
     "openai": "^4.73.0",
     "p-retry": "^4.6.2",
     "pdf-parse": "^1.1.1",
+    "pg": "^8.23.1",
     "playwright": "^1.49.0",
     "winston": "^3.17.0",
     "winston-daily-rotate-file": "^5.0.0"

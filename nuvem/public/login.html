@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Entrar — Contas a Pagar</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2311161d'/><path d='M9 16.5l4.5 4.5L23 11.5' stroke='%237aa2ff' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
+<style>
+  :root{--bg:#0d1014;--surface:#141920;--surface-2:#1a2029;--line:#232b36;--line-2:#2c3542;--text:#e7ebf1;--muted:#8c96a5;--faint:#5f6876;--accent:#7aa2ff;--accent-ink:#0b1220;--red:#ff7a72;--red-bg:rgba(255,122,114,.12);--green:#5fd39a;--green-bg:rgba(95,211,154,.12)}
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);min-height:100%}
+  body{font:14px/1.5 "Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;display:grid;place-items:center;min-height:100vh;padding:16px}
+  .caixa{width:min(380px,100%);background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:28px}
+  .marca{display:flex;align-items:center;gap:10px;font-weight:650;font-size:16px;margin-bottom:6px}
+  .marca i{width:28px;height:28px;border-radius:8px;background:var(--surface-2);border:1px solid var(--line-2);display:grid;place-items:center}
+  .marca svg{width:16px;height:16px;stroke:var(--accent);fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+  p.sub{margin:0 0 20px;color:var(--muted);font-size:13px}
+  label{display:block;font-size:12px;color:var(--muted);margin:0 0 5px}
+  .campo{margin-bottom:14px}
+  input{width:100%;font:inherit;font-size:14px;color:var(--text);background:var(--bg);border:1px solid var(--line-2);border-radius:9px;padding:10px 12px}
+  input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
+  button{width:100%;font:inherit;font-weight:600;font-size:14px;border-radius:9px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);padding:10px;cursor:pointer;margin-top:4px}
+  button:hover{background:#93b4ff}
+  button:disabled{opacity:.5;cursor:default}
+  .msg{font-size:13px;padding:9px 12px;border-radius:9px;margin-bottom:14px}
+  .msg.erro{background:var(--red-bg);color:var(--red)}
+  .msg.info{background:var(--surface-2);color:var(--muted)}
+  .hidden{display:none}
+  .dica{font-size:12px;color:var(--faint);margin-top:16px}
+</style>
+</head>
+<body>
+<main class="caixa">
+  <div class="marca"><i><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></i>Contas a Pagar</div>
+  <p class="sub" id="sub">Entre com seu usuário e senha.</p>
+  <div id="msg"></div>
+
+  <form id="frmLogin" class="hidden">
+    <div class="campo"><label for="u">Usuário</label><input id="u" name="usuario" autocomplete="username" autocapitalize="off" spellcheck="false" required /></div>
+    <div class="campo"><label for="s">Senha</label><input id="s" name="senha" type="password" autocomplete="current-password" required /></div>
+    <button>Entrar</button>
+    <p class="dica">Esqueceu a senha? Peça ao administrador para redefinir.</p>
+  </form>
+
+  <form id="frmPrimeiro" class="hidden">
+    <div class="campo"><label for="pn">Seu nome</label><input id="pn" name="nome" autocomplete="name" required /></div>
+    <div class="campo"><label for="pu">Usuário</label><input id="pu" name="usuario" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="ex.: luiz" required /></div>
+    <div class="campo"><label for="ps">Senha (mín. 10, letras e números)</label><input id="ps" name="senha" type="password" autocomplete="new-password" minlength="10" required /></div>
+    <div class="campo"><label for="ps2">Repita a senha</label><input id="ps2" type="password" autocomplete="new-password" minlength="10" required /></div>
+    <button>Criar administrador e entrar</button>
+  </form>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+const msg=(t,tipo='erro')=>{ $('#msg').innerHTML = t ? `<div class="msg ${tipo}" role="alert"></div>` : ''; if(t) $('#msg .msg').textContent=t; };
+const post=(url,body)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async r=>({ok:r.ok,status:r.status,json:await r.json().catch(()=>({}))}));
+const entrar=(u)=>{ location.href = u && u.deveTrocarSenha ? '/?trocarSenha=1' : '/'; };
+
+(async()=>{
+  const st = await fetch('/api/sessao').then(r=>r.json()).catch(()=>({}));
+  if(st.logado) return entrar();
+  if(st.semUsuarios){
+    if(st.nuvem){
+      $('#sub').textContent='Dashboard online ainda sem usuários.';
+      msg('Crie o primeiro administrador no computador do escritório: node scripts/nuvem.js admin <usuario> <Nome>. Quem já tinha usuário no dashboard local entra com o mesmo login.','info');
+    } else if(st.local){
+      $('#sub').textContent='Primeiro acesso: crie o usuário administrador.';
+      $('#frmPrimeiro').classList.remove('hidden'); $('#pn').focus();
+    } else {
+      $('#sub').textContent='Dashboard ainda sem usuários.';
+      msg('O primeiro administrador precisa ser criado no computador onde o dashboard roda (abra http://localhost:4599 nele).','info');
+    }
+    return;
+  }
+  $('#frmLogin').classList.remove('hidden'); $('#u').focus();
+})();
+
+$('#frmLogin').addEventListener('submit',async e=>{
+  e.preventDefault(); const b=e.target.querySelector('button'); b.disabled=true; msg('');
+  const r=await post('/api/login',{usuario:$('#u').value,senha:$('#s').value});
+  b.disabled=false;
+  if(r.ok) return entrar(r.json);
+  msg(r.json.erro||'Não foi possível entrar.'); $('#s').select();
+});
+
+$('#frmPrimeiro').addEventListener('submit',async e=>{
+  e.preventDefault(); msg('');
+  if($('#ps').value!==$('#ps2').value) return msg('As senhas não conferem.');
+  const b=e.target.querySelector('button'); b.disabled=true;
+  const r=await post('/api/primeiro-acesso',{nome:$('#pn').value,usuario:$('#pu').value,senha:$('#ps').value});
+  b.disabled=false;
+  if(r.ok) return entrar(r.json);
+  msg(r.json.erro||'Não foi possível criar.');
+});
+</script>
+</body>
+</html>

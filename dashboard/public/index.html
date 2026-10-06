@@ -345,9 +345,13 @@ async function carregar(){
   if(st.rodando){
     const min = st.inicio ? Math.floor((Date.now()-new Date(st.inicio))/60000) : 0;
     box.className='status rodando';
-    $('#status').textContent = (st.modo==='status' ? 'Atualizando status nos portais' : 'Baixando contas dos portais') + (min ? ` · ${min} min` : '…');
+    $('#status').textContent = st.aguardandoComputador
+      ? 'Pedido enviado — aguardando o computador do escritório'
+      : (st.modo==='status' ? 'Atualizando status nos portais' : 'Baixando contas dos portais') + (min ? ` · ${min} min` : '…');
     setTimeout(carregar, 5000);
   }
+  // Versão online: avisa quando o computador que busca as contas está desligado.
+  if(st.agenteOnline===false){ box.classList.add('erro'); $('#status').textContent += ' · computador do escritório offline'; box.title='Os dados são da última sincronização. Novas buscas esperam o computador ligar.'; }
 }
 
 function renderResumo(r){
