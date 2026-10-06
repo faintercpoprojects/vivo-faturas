@@ -24,5 +24,5 @@ console.log('Publicando a partir de', DESTINO);
 try {
   execSync('npx vercel@latest deploy --prod --yes', { cwd: DESTINO, stdio: 'inherit' });
 } finally {
-  fs.rmSync(DESTINO, { recursive: true, force: true });
+  try { fs.rmSync(DESTINO, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }); } catch { /* pasta temporária presa pelo Windows: sem problema */ }
 }
