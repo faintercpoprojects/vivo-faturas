@@ -100,10 +100,52 @@ const req = async (p, { method = 'GET', body, cookie, headers = {} } = {}) => {
     r = await req('/api/run/status', { cookie: ck });
     ok(executou === 'completo' && !r.json.rodando && r.json.agenteOnline, 'computador pegou o pedido, executou e ficou online');
 
+    // ---- "Esqueci minha senha" (e-mail capturado em vez de enviado)
+    const enviados = [];
+    require('../lib/email').usarEnvio(async (m) => { enviados.push(m); });
+    r = await req('/api/sessao'); ok(r.json.esqueci === true, 'login mostra "Esqueci minha senha" quando o e-mail está configurado');
+    r = await req('/api/esqueci', { method: 'POST', body: { identificador: 'teste.admin' } });
+    ok(r.status === 200 && enviados.length === 0, 'usuário sem e-mail: resposta genérica e nada é enviado');
+    r = await req('/api/meu-email', { method: 'POST', cookie: ck, body: { email: 'invalido' } });
+    ok(r.status === 400, 'e-mail inválido recusado');
+    r = await req('/api/meu-email', { method: 'POST', cookie: ck, body: { email: 'admin.teste@example.com' } });
+    ok(r.status === 200, 'usuário cadastra o próprio e-mail');
+    r = await req('/api/esqueci', { method: 'POST', body: { identificador: 'ninguem@example.com' } });
+    const genericaDesconhecido = r.json.mensagem;
+    r = await req('/api/esqueci', { method: 'POST', body: { identificador: 'ADMIN.TESTE@example.com' } });
+    ok(r.status === 200 && r.json.mensagem === genericaDesconhecido, 'mesma resposta para usuário existente e inexistente');
+    ok(enviados.length === 1 && enviados[0].para === 'admin.teste@example.com', 'e-mail enviado só para o usuário certo (achado pelo e-mail)');
+    const token = ((enviados[0] && enviados[0].texto.match(/#redefinir=([\w-]+)/)) || [])[1];
+    ok(token && /http:\/\/localhost:4611\/login\.html#redefinir=/.test(enviados[0].texto), 'e-mail traz link para o próprio site');
+    r = await req('/api/esqueci', { method: 'POST', body: { identificador: 'teste.admin' } });
+    ok(enviados.length === 1, 'não manda outro link em menos de 2 minutos');
+    const guardado = (await query('SELECT token_hash FROM redefinicoes LIMIT 1'))[0];
+    ok(guardado && guardado.token_hash !== token, 'banco guarda só o hash do link');
+    r = await req('/api/redefinir', { method: 'POST', body: { token, nova: 'curta' } });
+    ok(r.status === 400, 'senha fraca recusada na redefinição');
+    const nova = 'N' + crypto.randomBytes(8).toString('hex') + '5';
+    r = await req('/api/redefinir', { method: 'POST', body: { token, nova } });
+    ok(r.status === 200 && r.json.usuario === 'teste.admin', 'nova senha criada pelo link');
+    r = await req('/api/contas', { cookie: ck }); ok(r.status === 401, 'sessões antigas caem após redefinir');
+    r = await req('/api/login', { method: 'POST', body: { usuario: 'teste.admin', senha } }); ok(r.status === 401, 'senha antiga não funciona mais');
+    r = await req('/api/login', { method: 'POST', body: { usuario: 'teste.admin', senha: nova } }); ok(r.status === 200, 'login com a nova senha');
+    const ck2 = r.cookie;
+    r = await req('/api/redefinir', { method: 'POST', body: { token, nova: 'Outra' + nova } }); ok(r.status === 400, 'link usado não funciona de novo');
+    await query("UPDATE redefinicoes SET criado_em = '2000-01-01T00:00:00Z'"); // libera novo pedido
+    await req('/api/esqueci', { method: 'POST', body: { identificador: 'teste.admin' } });
+    const token2 = (enviados[1].texto.match(/#redefinir=([\w-]+)/) || [])[1];
+    await query('UPDATE redefinicoes SET expira = 1 WHERE usado = 0');
+    r = await req('/api/redefinir', { method: 'POST', body: { token: token2, nova: 'Outra' + nova } }); ok(r.status === 400, 'link vencido (30 min) é recusado');
+    r = await req('/api/redefinir', { method: 'POST', body: { token: 'inventado', nova: 'Outra' + nova } }); ok(r.status === 400, 'link inventado é recusado');
+    r = await req('/api/usuarios', { cookie: ck2 }); ok(r.json[0] && 'email' in r.json[0], 'admin vê o e-mail dos usuários');
+    let ultE; for (let i = 0; i < 9; i++) ultE = await req('/api/esqueci', { method: 'POST', body: { identificador: 'x' + i } });
+    ok(ultE.status === 429, 'limite de pedidos de "Esqueci minha senha" por IP');
+    const ckSeg = ck2;
+
     // ---- segurança
-    r = await req(`/api/contas/${c0.id}`, { method: 'PATCH', cookie: ck, body: { observacoes: 'x' }, headers: { Origin: 'https://outro-site.example' } });
+    r = await req(`/api/contas/${c0.id}`, { method: 'PATCH', cookie: ckSeg, body: { observacoes: 'x' }, headers: { Origin: 'https://outro-site.example' } });
     ok(r.status === 403, 'alteração vinda de outro site bloqueada');
-    const [dados, sig] = decodeURIComponent(ck.split('=')[1]).split('.');
+    const [dados, sig] = decodeURIComponent(ckSeg.split('=')[1]).split('.');
     const f = JSON.parse(Buffer.from(dados, 'base64url').toString()); f.i = 999;
     r = await req('/api/contas', { cookie: `cp_sessao=${Buffer.from(JSON.stringify(f)).toString('base64url')}.${sig}` });
     ok(r.status === 401, 'cookie adulterado recusado');

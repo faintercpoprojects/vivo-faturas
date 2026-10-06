@@ -169,6 +169,7 @@
       <div class="menu hidden" id="menuUsuario" role="menu">
         <div class="quem"><b id="menuNome"></b><span id="menuLogin"></span></div>
         <button id="mSenha" role="menuitem">Trocar senha</button>
+        <button id="mEmail" role="menuitem" class="hidden">Meu e-mail</button>
         <button id="mUsuarios" role="menuitem" class="hidden">Usuários</button>
         <button id="mSair" role="menuitem"><svg class="ic"><use href="#i-sair"/></svg>Sair</button>
       </div>
@@ -280,6 +281,21 @@
   </form>
 </dialog>
 
+<dialog id="dlgEmail">
+  <form id="frmEmail">
+    <div class="hd">Meu e-mail</div>
+    <div class="sub">Usado para receber o link de "Esqueci minha senha".</div>
+    <div class="bd">
+      <div><label>E-mail</label><input name="email" type="email" autocomplete="email" placeholder="voce@empresa.com.br" /></div>
+      <div class="erro-form" id="emailErro"></div>
+    </div>
+    <div class="ft">
+      <button type="button" class="fantasma" id="emailCancelar">Cancelar</button>
+      <button type="submit" class="primario">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="dlgUsuarios" style="width:min(520px,calc(100vw - 32px))">
   <div class="hd">Usuários</div>
   <div class="sub">Cada pessoa entra com o próprio usuário. Novos usuários recebem uma senha temporária e trocam no primeiro acesso.</div>
@@ -288,6 +304,7 @@
     <form id="frmNovoUsuario" class="row" style="align-items:flex-end;flex-wrap:wrap">
       <div><label>Nome</label><input name="nome" required placeholder="ex.: Maria Souza" /></div>
       <div><label>Usuário</label><input name="usuario" required placeholder="ex.: maria" autocapitalize="off" spellcheck="false" /></div>
+      <div class="so-nuvem hidden"><label>E-mail</label><input name="email" type="email" placeholder="opcional" /></div>
       <div style="flex:0 0 auto"><label style="display:flex;gap:6px;align-items:center;margin-bottom:9px"><input type="checkbox" name="admin" style="width:auto" /> admin</label></div>
       <div style="flex:0 0 auto"><button type="submit" class="primario">Adicionar</button></div>
     </form>
@@ -548,8 +565,9 @@ async function listarUsuarios(){
   const lista=await fetch('/api/usuarios').then(r=>r.json());
   $('#listaUsuarios').innerHTML=lista.map(u=>`<div class="usr">
     <div class="n">${esc(u.nome)}${u.admin?'<span class="tag">admin</span>':''}${u.ativo?'':'<span class="tag off">desativado</span>'}
-      <span>${esc(u.usuario)} · ${u.ultimo_login?'último acesso '+new Date(u.ultimo_login).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}):'nunca entrou'}</span></div>
+      <span>${esc(u.usuario)}${EU.nuvem?' · '+(u.email?esc(u.email):'<i>sem e-mail</i>'):''} · ${u.ultimo_login?'último acesso '+new Date(u.ultimo_login).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}):'nunca entrou'}</span></div>
     ${u.id===EU.id?'<span class="faint" style="font-size:12px">você</span>':`
+      ${EU.nuvem?`<button class="chip" onclick="definirEmail(${u.id},'${esc(u.email||'')}')">E-mail</button>`:''}
       <button class="chip" onclick="redefinir(${u.id},'${esc(u.nome)}')">Redefinir senha</button>
       <button class="chip" onclick="alternarAtivo(${u.id},${!u.ativo})">${u.ativo?'Desativar':'Reativar'}</button>`}
   </div>`).join('');
@@ -561,7 +579,7 @@ $('#mUsuarios').onclick=async()=>{ menu.classList.add('hidden'); $('#senhaTemp')
 $('#usuariosFechar').onclick=()=>{ $('#senhaTemp').innerHTML=''; $('#dlgUsuarios').close(); };
 $('#frmNovoUsuario').addEventListener('submit',async e=>{
   e.preventDefault(); const f=e.target; $('#usuariosErro').textContent='';
-  const r=await fetch('/api/usuarios',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome:f.nome.value,usuario:f.usuario.value,admin:f.admin.checked})});
+  const r=await fetch('/api/usuarios',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome:f.nome.value,usuario:f.usuario.value,admin:f.admin.checked,email:f.email?f.email.value:undefined})});
   const j=await r.json().catch(()=>({}));
   if(!r.ok){ $('#usuariosErro').textContent=j.erro||'Não foi possível adicionar.'; return; }
   mostrarSenhaTemp(f.nome.value,j.usuario,j.senhaTemporaria); f.reset(); listarUsuarios();
@@ -572,6 +590,22 @@ window.redefinir=async(id,nome)=>{
   const u=(await fetch('/api/usuarios').then(r=>r.json())).find(x=>x.id===id);
   mostrarSenhaTemp(nome,u?u.usuario:'',j.senhaTemporaria); listarUsuarios();
 };
+window.definirEmail=async(id,atual)=>{
+  const email=prompt('E-mail para recuperar a senha (deixe vazio para remover):',atual||'');
+  if(email===null) return;
+  const r=await fetch(`/api/usuarios/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
+  if(!r.ok){ const j=await r.json().catch(()=>({})); $('#usuariosErro').textContent=j.erro||'Erro'; }
+  listarUsuarios();
+};
+$('#mEmail').onclick=()=>{ menu.classList.add('hidden'); $('#frmEmail').email.value=EU.email||''; $('#emailErro').textContent=''; $('#dlgEmail').showModal(); };
+$('#emailCancelar').onclick=()=>$('#dlgEmail').close();
+$('#frmEmail').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const r=await fetch('/api/meu-email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:e.target.email.value})});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){ $('#emailErro').textContent=j.erro||'Não foi possível salvar.'; return; }
+  EU.email=j.email; $('#dlgEmail').close(); toast('E-mail salvo');
+});
 window.alternarAtivo=async(id,ativo)=>{
   const r=await fetch(`/api/usuarios/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({ativo})});
   if(!r.ok){ const j=await r.json().catch(()=>({})); $('#usuariosErro').textContent=j.erro||'Erro'; }
@@ -583,6 +617,10 @@ window.alternarAtivo=async(id,ativo)=>{
   $('#nomeUsuario').textContent = EU.nome.split(' ')[0];
   $('#menuNome').textContent = EU.nome; $('#menuLogin').textContent = EU.usuario + (EU.admin?' · administrador':'');
   $('#mUsuarios').classList.toggle('hidden',!EU.admin);
+  // Versão online: e-mail para "Esqueci minha senha".
+  $('#mEmail').classList.toggle('hidden',!EU.nuvem);
+  document.querySelectorAll('.so-nuvem').forEach(el=>el.classList.toggle('hidden',!EU.nuvem));
+  if(EU.nuvem && EU.esqueci && !EU.email) setTimeout(()=>toast('Cadastre seu e-mail (menu com seu nome → Meu e-mail) para poder recuperar a senha.'),1500);
   if(EU.deveTrocarSenha){ abrirSenha(true); return; }
   carregar();
   setInterval(()=>{ if(!senhaObrigatoria) carregar(); }, 60000); // atualiza a cada minuto

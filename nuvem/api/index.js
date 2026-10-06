@@ -7,6 +7,20 @@
  */
 const { q, um } = require('../lib/db');
 const A = require('../lib/auth');
+const E = require('../lib/email');
+const crypto = require('crypto');
+
+const MINUTOS_LINK = 30;
+const emailValido = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(e || '').trim());
+const hashToken = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+/** Endereço do site para o link do e-mail (APP_URL; senão o próprio domínio da Vercel). */
+function baseUrl(req) {
+  if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, '');
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '');
+  if (/^[a-z0-9.-]+\.vercel\.app$/i.test(host)) return `https://${host}`;
+  if (/^localhost(:\d+)?$/i.test(host)) return `http://${host}`;
+  return 'https://contas-cpo.vercel.app';
+}
 
 const hoje = () => new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10); // horário de Brasília
 const agora = () => new Date().toISOString();
@@ -67,7 +81,7 @@ module.exports = async function handler(req, res) {
     // ---- rotas sem login
     if (rota === 'sessao' && metodo === 'GET') {
       const n = Number((await um('SELECT COUNT(*)::int AS n FROM usuarios')).n);
-      return json(res, 200, { logado: !!(await A.usuarioDaSessao(req)), semUsuarios: n === 0, local: false, nuvem: true });
+      return json(res, 200, { logado: !!(await A.usuarioDaSessao(req)), semUsuarios: n === 0, local: false, nuvem: true, esqueci: E.configurado() });
     }
     if (rota === 'primeiro-acesso') {
       return json(res, 403, { erro: 'Na versão online, o primeiro administrador é criado no computador do escritório: node scripts/nuvem.js admin' });
@@ -84,12 +98,62 @@ module.exports = async function handler(req, res) {
     }
     if (rota === 'logout' && metodo === 'POST') { A.gravarCookie(res, '', 0); return json(res, 200, { ok: true }); }
 
+    // ---- "Esqueci minha senha": envia link por e-mail (resposta sempre igual,
+    //      para não revelar quais usuários/e-mails existem).
+    if (rota === 'esqueci' && metodo === 'POST') {
+      const generica = { ok: true, mensagem: 'Se existir um usuário com esse login ou e-mail cadastrado, enviamos um link para criar uma nova senha. Confira sua caixa de entrada (e o spam).' };
+      if (!E.configurado()) return json(res, 503, { erro: 'Recuperação por e-mail ainda não configurada. Peça ao administrador para redefinir sua senha.' });
+      const ip = A.ipDe(req);
+      const chave = 'esqueci:' + ip;
+      if (await A.bloqueado(chave)) return json(res, 429, { erro: 'Muitos pedidos. Aguarde 15 minutos.' });
+      await A.falhou(chave); // conta cada pedido (limite por IP)
+      const id = String(corpo.identificador || '').trim();
+      if (!id) return json(res, 400, { erro: 'Informe seu usuário ou e-mail.' });
+      const u = await um('SELECT * FROM usuarios WHERE ativo = 1 AND (lower(usuario) = lower($1) OR lower(email) = lower($1)) LIMIT 1', [id]);
+      if (!u || !u.email) return json(res, 200, generica);
+      // No máximo 1 link a cada 2 minutos por usuário.
+      const recente = await um('SELECT 1 FROM redefinicoes WHERE usuario_id = $1 AND criado_em > $2', [u.id, new Date(Date.now() - 2 * 60 * 1000).toISOString()]);
+      if (recente) return json(res, 200, generica);
+      const token = crypto.randomBytes(32).toString('base64url');
+      await q('INSERT INTO redefinicoes (token_hash, usuario_id, expira, criado_em, ip) VALUES ($1,$2,$3,$4,$5)',
+        [hashToken(token), u.id, Date.now() + MINUTOS_LINK * 60 * 1000, agora(), ip]);
+      const msg = E.emailRedefinicao({ nome: u.nome, usuario: u.usuario, link: `${baseUrl(req)}/login.html#redefinir=${token}`, minutos: MINUTOS_LINK });
+      try {
+        await E.enviarEmail({ para: u.email, ...msg });
+      } catch (e) {
+        console.error('esqueci: falha ao enviar e-mail:', e.message);
+        return json(res, 502, { erro: 'Não foi possível enviar o e-mail agora. Tente de novo em alguns minutos.' });
+      }
+      return json(res, 200, generica);
+    }
+    if (rota === 'redefinir' && metodo === 'POST') {
+      const ip = A.ipDe(req);
+      if (await A.bloqueado('redefinir:' + ip)) return json(res, 429, { erro: 'Muitas tentativas. Aguarde 15 minutos.' });
+      const r = await um('SELECT * FROM redefinicoes WHERE token_hash = $1', [hashToken(corpo.token || '')]);
+      if (!r || r.usado || Number(r.expira) < Date.now()) {
+        await A.falhou('redefinir:' + ip);
+        return json(res, 400, { erro: 'Link inválido ou expirado. Peça um novo em "Esqueci minha senha".' });
+      }
+      const fraca = A.senhaFraca(corpo.nova); if (fraca) return json(res, 400, { erro: fraca });
+      await q('UPDATE usuarios SET senha_hash = $1, deve_trocar_senha = 0, sessao_versao = sessao_versao + 1 WHERE id = $2', [A.hashSenha(corpo.nova), r.usuario_id]);
+      await q('UPDATE redefinicoes SET usado = 1 WHERE usuario_id = $1', [r.usuario_id]); // invalida todos os links desse usuário
+      const u = await um('SELECT usuario FROM usuarios WHERE id = $1', [r.usuario_id]);
+      await A.registrar({ nome: u ? u.usuario : null }, null, 'redefiniu-senha-por-email');
+      return json(res, 200, { ok: true, usuario: u ? u.usuario : null });
+    }
+
     // ---- daqui para baixo, só logado
     const eu = await A.usuarioDaSessao(req);
     if (!eu) return json(res, 401, { erro: 'faça login' });
     if (eu.deve_trocar_senha && !['senha', 'me', 'logout'].includes(rota)) return json(res, 403, { erro: 'troque a senha para continuar', trocarSenha: true });
 
-    if (rota === 'me') return json(res, 200, A.publico(eu));
+    if (rota === 'me') return json(res, 200, { ...A.publico(eu), email: eu.email || null, nuvem: true, esqueci: E.configurado() });
+    if (rota === 'meu-email' && metodo === 'POST') {
+      const email = String(corpo.email || '').trim();
+      if (email && !emailValido(email)) return json(res, 400, { erro: 'E-mail inválido.' });
+      await q('UPDATE usuarios SET email = $1 WHERE id = $2', [email || null, eu.id]);
+      return json(res, 200, { ok: true, email: email || null });
+    }
 
     if (rota === 'senha' && metodo === 'POST') {
       if (!A.conferirSenha(corpo.atual || '', eu.senha_hash)) return json(res, 400, { erro: 'Senha atual incorreta.' });
@@ -103,15 +167,16 @@ module.exports = async function handler(req, res) {
     if (partes[0] === 'usuarios') {
       if (!eu.admin) return json(res, 403, { erro: 'apenas administradores' });
       if (partes.length === 1 && metodo === 'GET') {
-        return json(res, 200, await q('SELECT id, usuario, nome, admin, ativo, deve_trocar_senha, ultimo_login, created_at FROM usuarios ORDER BY nome'));
+        return json(res, 200, await q('SELECT id, usuario, nome, email, admin, ativo, deve_trocar_senha, ultimo_login, created_at FROM usuarios ORDER BY nome'));
       }
       if (partes.length === 1 && metodo === 'POST') {
         if (!/^[a-z0-9._-]{3,32}$/i.test(corpo.usuario || '')) return json(res, 400, { erro: 'usuário: 3 a 32 letras, números, ponto, hífen ou _' });
         if (!String(corpo.nome || '').trim()) return json(res, 400, { erro: 'informe o nome' });
+        if (corpo.email && !emailValido(corpo.email)) return json(res, 400, { erro: 'E-mail inválido.' });
         if (await um('SELECT 1 FROM usuarios WHERE lower(usuario) = lower($1)', [corpo.usuario.trim()])) return json(res, 409, { erro: 'esse usuário já existe' });
         const temp = A.senhaTemporaria();
-        await q('INSERT INTO usuarios (usuario, nome, senha_hash, admin, deve_trocar_senha, created_at) VALUES ($1,$2,$3,$4,1,$5)',
-          [corpo.usuario.trim(), corpo.nome.trim(), A.hashSenha(temp), corpo.admin ? 1 : 0, agora()]);
+        await q('INSERT INTO usuarios (usuario, nome, email, senha_hash, admin, deve_trocar_senha, created_at) VALUES ($1,$2,$3,$4,$5,1,$6)',
+          [corpo.usuario.trim(), corpo.nome.trim(), String(corpo.email || '').trim() || null, A.hashSenha(temp), corpo.admin ? 1 : 0, agora()]);
         return json(res, 200, { ok: true, usuario: corpo.usuario.trim(), senhaTemporaria: temp });
       }
       if (partes.length === 2 && metodo === 'PATCH') {
@@ -120,6 +185,10 @@ module.exports = async function handler(req, res) {
         let temp = null;
         if (typeof corpo.ativo === 'boolean') await q('UPDATE usuarios SET ativo = $1, sessao_versao = sessao_versao + 1 WHERE id = $2', [corpo.ativo ? 1 : 0, id]);
         if (typeof corpo.admin === 'boolean') await q('UPDATE usuarios SET admin = $1 WHERE id = $2', [corpo.admin ? 1 : 0, id]);
+        if (typeof corpo.email === 'string') {
+          if (corpo.email.trim() && !emailValido(corpo.email)) return json(res, 400, { erro: 'E-mail inválido.' });
+          await q('UPDATE usuarios SET email = $1 WHERE id = $2', [corpo.email.trim() || null, id]);
+        }
         if (corpo.redefinirSenha) {
           temp = A.senhaTemporaria();
           await q('UPDATE usuarios SET senha_hash = $1, deve_trocar_senha = 1, sessao_versao = sessao_versao + 1 WHERE id = $2', [A.hashSenha(temp), id]);

@@ -12,7 +12,8 @@
     "copiar-telas": "node -e \"for(const f of ['index.html','login.html'])require('fs').copyFileSync('../dashboard/public/'+f,'public/'+f)\""
   },
   "dependencies": {
-    "@neondatabase/serverless": "^1.0.0"
+    "@neondatabase/serverless": "^1.0.0",
+    "nodemailer": "^10.0.15"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.0"

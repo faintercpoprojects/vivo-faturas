@@ -99,3 +99,16 @@ CREATE TABLE IF NOT EXISTS agente (
   ultima_coleta_fim  TEXT,
   ultima_coleta_ok   INTEGER
 );
+
+-- "Esqueci minha senha": e-mail do usuário e links de redefinição.
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email TEXT;
+
+-- Guarda só o HASH do link (quem lê o banco não consegue usar o link).
+CREATE TABLE IF NOT EXISTS redefinicoes (
+  token_hash TEXT PRIMARY KEY,
+  usuario_id INTEGER NOT NULL,
+  expira     BIGINT NOT NULL,
+  usado      INTEGER NOT NULL DEFAULT 0,
+  criado_em  TEXT NOT NULL,
+  ip         TEXT
+);
