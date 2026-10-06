@@ -36,7 +36,10 @@ function conectar() {
   const url = process.env.NUVEM_DATABASE_URL;
   if (!url) throw new Error('NUVEM_DATABASE_URL não configurada no .env');
   const { Pool } = require('pg');
-  pool = new Pool({ connectionString: url, max: 3, idleTimeoutMillis: 20000, connectionTimeoutMillis: 20000 });
+  // TLS com verificação do certificado, explícito (evita o aviso do pg sobre sslmode).
+  const u = new URL(url);
+  u.searchParams.delete('sslmode');
+  pool = new Pool({ connectionString: u.toString(), ssl: { rejectUnauthorized: true }, max: 3, idleTimeoutMillis: 20000, connectionTimeoutMillis: 20000 });
   pool.on('error', () => { /* conexão ociosa caiu; o pool reabre */ });
   q = async (sql, params = []) => (await pool.query(sql, params)).rows;
   exec = async (sql) => { await pool.query(sql); };

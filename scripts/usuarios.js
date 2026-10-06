@@ -41,7 +41,8 @@ const fecharLeitor = () => { if (rl) { rl.close(); rl = null; } };
 async function nuvemQuery(sql, params) {
   if (!process.env.NUVEM_DATABASE_URL) return null;
   const { Client } = require('pg');
-  const c = new Client({ connectionString: process.env.NUVEM_DATABASE_URL });
+  const u = new URL(process.env.NUVEM_DATABASE_URL); u.searchParams.delete('sslmode');
+  const c = new Client({ connectionString: u.toString(), ssl: { rejectUnauthorized: true } });
   await c.connect();
   try { return (await c.query(sql, params)).rows; } finally { await c.end(); }
 }

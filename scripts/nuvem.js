@@ -55,7 +55,7 @@ const fecharLeitor = () => { if (rl) { rl.close(); rl = null; } };
   }
   else if (cmd === 'status') {
     await nuvem.esquema();
-    const pg = require('pg'); const c = new pg.Client({ connectionString: process.env.NUVEM_DATABASE_URL }); await c.connect();
+    const pg = require('pg'); const cu = new URL(process.env.NUVEM_DATABASE_URL); cu.searchParams.delete('sslmode'); const c = new pg.Client({ connectionString: cu.toString(), ssl: { rejectUnauthorized: true } }); await c.connect();
     const a = (await c.query('SELECT * FROM agente WHERE id = 1')).rows[0];
     const n = (await c.query('SELECT COUNT(*)::int n FROM contas')).rows[0].n;
     const u = (await c.query('SELECT COUNT(*)::int n FROM usuarios')).rows[0].n;
