@@ -28,6 +28,10 @@ if (-not $admin) {
   exit
 }
 
+New-Item -ItemType Directory -Force (Join-Path $Pasta 'logs') | Out-Null
+Start-Transcript -Path (Join-Path $Pasta 'logs\instalar-servidor.log') -Append | Out-Null
+trap { Write-Host "ERRO: $($_.Exception.Message)" -ForegroundColor Red; Stop-Transcript | Out-Null; Read-Host 'Enter para fechar'; exit 1 }
+
 if ($Remover) {
   Stop-ScheduledTask -TaskName $Nome -ErrorAction SilentlyContinue
   Unregister-ScheduledTask -TaskName $Nome -Confirm:$false -ErrorAction SilentlyContinue
@@ -75,4 +79,5 @@ if ($ok) {
 } else {
   Write-Host "`nA tarefa foi criada, mas o dashboard ainda nao respondeu. Veja logs\servidor.log." -ForegroundColor Yellow
 }
+Stop-Transcript | Out-Null
 Read-Host "`nEnter para fechar"
