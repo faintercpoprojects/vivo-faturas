@@ -15,13 +15,26 @@ const readline = require('readline');
 const nuvem = require('../src/nuvem');
 const { hashSenha, senhaFraca } = require('../nuvem/lib/auth');
 
+// Um único leitor, com fila de linhas (nenhuma resposta se perde) e sem eco da senha.
+let rl = null;
+let prompt = '';
+const fila = [];
+const esperando = [];
 function perguntarOculto(texto) {
+  if (!rl) {
+    rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: !!process.stdin.isTTY });
+    rl._writeToOutput = (s) => { if (s.includes(prompt)) rl.output.write(prompt); };
+    rl.on('line', (l) => { const w = esperando.shift(); if (w) w(l); else fila.push(l); });
+    rl.on('close', () => { while (esperando.length) esperando.shift()(''); });
+  }
+  prompt = texto;
+  rl.setPrompt(texto); rl.prompt();
   return new Promise((resolve) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-    rl._writeToOutput = (s) => { if (s.includes(texto)) rl.output.write(s); };
-    rl.question(texto, (r) => { rl.close(); process.stdout.write('\n'); resolve(r); });
+    const fim = (r) => { process.stdout.write('\n'); resolve(r); };
+    if (fila.length) fim(fila.shift()); else esperando.push(fim);
   });
 }
+const fecharLeitor = () => { if (rl) { rl.close(); rl = null; } };
 
 (async () => {
   const [cmd, ...args] = process.argv.slice(2);
@@ -51,5 +64,6 @@ function perguntarOculto(texto) {
     console.log({ contas: n, usuarios: u, agente: a, ultimosPedidos: cmds });
   }
   else { console.log('Comandos: esquema | enviar | admin <usuario> <Nome> | status'); }
+  fecharLeitor();
   await nuvem.fechar();
-})().catch(async (e) => { console.error('Erro:', e.message); await nuvem.fechar(); process.exit(1); });
+})().catch(async (e) => { console.error('Erro:', e.message); fecharLeitor(); await nuvem.fechar(); process.exit(1); });
