@@ -256,8 +256,11 @@ function iniciarColeta(modo, aoTerminar) {
 ==== Início (${modo}): ${new Date().toLocaleString('pt-BR')} ====
 `);
   rodando = true; modoAtual = modo; inicioAtual = new Date().toISOString();
-  // 1º outras operadoras (Desktop, AONet — rápido), depois a Vivo.
+  // 1º outras operadoras (Desktop, AONet, Vero — rápido), depois a Vivo e, no
+  // modo completo ("Baixar contas"), envia ao Google Drive os PDFs que faltam.
   const etapas = [['operadoras.js', '--headless'], args];
+  const driveLigado = process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID && !/^(false|0|nao|não)$/i.test(process.env.DRIVE_SYNC || '');
+  if (modo === 'completo' && driveLigado) etapas.push(['scripts/sincronizar-drive.js']);
   let pior = 0;
   const fim = (codigo) => {
     if (!rodando) return;

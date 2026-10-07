@@ -14,7 +14,8 @@
     "login": "node index.js --only-login --headed",
     "google:token": "node scripts/gerar-token-google.js",
     "postinstall": "playwright install chromium",
-    "dashboard": "node dashboard/server.js"
+    "dashboard": "node dashboard/server.js",
+    "drive": "node scripts/sincronizar-drive.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

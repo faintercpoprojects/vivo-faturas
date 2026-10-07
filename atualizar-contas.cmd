@@ -3,7 +3,7 @@ REM ============================================================
 REM ATALHO MANUAL - Automacao Vivo Empresas
 REM Baixa as faturas/boletos do mes (todas as empresas, menos as
 REM ignoradas, Movel + Fixo, todas as paginas) e ABRE o dashboard.
-REM NAO sobe nada ao Google Drive (upload e manual).
+REM No fim, envia ao Google Drive os PDFs que ainda nao estao la.
 REM ============================================================
 setlocal
 cd /d "%~dp0"
@@ -14,7 +14,8 @@ echo ====================================================
 echo   Baixando faturas do mes... (pode levar alguns min)
 echo ====================================================
 "%NODE%" "%~dp0operadoras.js" --headless
-"%NODE%" "%~dp0index.js" --todos-cnpj --incluir-pagas --headless
+"%NODE%" "%~dp0index.js" --todos-cnpj --incluir-pagas --headless --no-upload
+"%NODE%" "%~dp0scripts\sincronizar-drive.js"
 
 echo.
 echo ====================================================
