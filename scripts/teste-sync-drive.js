@@ -4,65 +4,66 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
+const { DatabaseSync } = require('node:sqlite');
 
-// Drive falso em memória.
-const pastas = new Map();   // id -> { nome, pai }
-const arquivos = [];        // { id, nome, pasta }
+// Drive falso em memória: pastas na raiz + arquivos com MD5.
+const pastas = new Map([['raiz', { nome: 'Contas Telefonia', pai: null }]]);
+const arquivos = []; // { id, nome, pasta, md5 }
 let seq = 0;
+const md5Arq = (f) => crypto.createHash('md5').update(fs.readFileSync(f)).digest('hex');
 const falso = {
   verificarConexao: async () => ({ ok: true }),
-  garantirArvore: async ({ empresa, cnpjFormatado, ano, mes }) => {
-    let pai = 'raiz';
-    for (const nome of [empresa, cnpjFormatado, String(ano), `${String(mes).padStart(2, '0')}`]) {
-      let id = [...pastas].find(([, p]) => p.nome === nome && p.pai === pai)?.[0];
-      if (!id) { id = `p${++seq}`; pastas.set(id, { nome, pai }); }
-      pai = id;
-    }
-    return pai;
+  garantirPasta: async (nome, pai) => {
+    let id = [...pastas].find(([, p]) => p.nome === nome && p.pai === pai)?.[0];
+    if (!id) { id = `p${++seq}`; pastas.set(id, { nome, pai }); }
+    return id;
   },
   buscarArquivo: async (nome, pastaId) => arquivos.find((a) => a.nome === nome && a.pasta === pastaId) || null,
-  enviarArquivo: async (arq, pastaId) => { const a = { id: `f${++seq}`, nome: path.basename(arq), pasta: pastaId }; arquivos.push(a); return { id: a.id, status: 'enviado' }; },
+  enviarArquivo: async (arq, pastaId) => { const a = { id: `f${++seq}`, nome: path.basename(arq), pasta: pastaId, md5: md5Arq(arq) }; arquivos.push(a); return { id: a.id, status: 'enviado' }; },
+  drive: () => ({ files: { list: async ({ q }) => {
+    const pai = q.match(/'([^']+)' in parents/)[1];
+    const subpastas = [...pastas].filter(([, p]) => p.pai === pai).map(([id, p]) => ({ id, name: p.nome, mimeType: 'application/vnd.google-apps.folder' }));
+    const arqs = arquivos.filter((a) => a.pasta === pai).map((a) => ({ id: a.id, name: a.nome, md5Checksum: a.md5 }));
+    return { data: { files: [...subpastas, ...arqs] } };
+  } } }),
 };
 require.cache[require.resolve('../src/uploadDrive')] = { id: 'x', filename: 'x', loaded: true, exports: falso };
 
-// Registro local isolado (não mexe no real).
 const { config } = require('../src/config');
-config.paths.state = fs.mkdtempSync(path.join(os.tmpdir(), 'drive-teste-'));
-const { sincronizarDrive } = require('../src/syncDrive');
+config.drive.rootFolderId = 'raiz';
+config.paths.state = fs.mkdtempSync(path.join(os.tmpdir(), 'drive-teste-')); // registro local isolado
+const { sincronizarDrive, anoMes, nomePastaMes } = require('../src/syncDrive');
 
 let falhas = 0;
 const ok = (c, n) => { console.log(`${c ? 'OK    ' : 'FALHOU'} ${n}`); if (!c) falhas++; };
-const caminho = (id) => { const p = []; while (id && id !== 'raiz') { const x = pastas.get(id); p.unshift(x.nome); id = x.pai; } return p.join(' / '); };
+const nomePasta = (id) => pastas.get(id).nome;
 
 (async () => {
   const dbFile = path.resolve(__dirname, '..', '.state', 'contas.db');
-  // Simula um arquivo que já estava no Drive antes (subido à mão).
-  const { DatabaseSync } = require('node:sqlite');
-  const algum = new DatabaseSync(dbFile, { readOnly: true }).prepare("SELECT * FROM contas WHERE pdf_path IS NOT NULL LIMIT 1").get();
-  if (algum && fs.existsSync(algum.pdf_path)) {
-    const { nomesPorCnpj, anoMes } = require('../src/syncDrive');
-    const todas = new DatabaseSync(dbFile, { readOnly: true }).prepare('SELECT * FROM contas').all();
-    const { ano, mes } = anoMes(algum);
-    const pasta = await falso.garantirArvore({ empresa: nomesPorCnpj(todas).get(algum.cnpj) || algum.empresa, cnpjFormatado: algum.cnpj, ano, mes });
-    arquivos.push({ id: 'manual', nome: path.basename(algum.pdf_path), pasta });
-  }
-  const antes = arquivos.length;
+  const contas = new DatabaseSync(dbFile, { readOnly: true }).prepare('SELECT * FROM contas').all();
+  // Simula o financeiro: um PDF já está no Drive, numa pasta manual e com OUTRO nome.
+  const manual = contas.find((c) => c.pdf_path && fs.existsSync(c.pdf_path));
+  const pastaManual = await falso.garantirPasta('Setembro - 2026', 'raiz');
+  arquivos.push({ id: 'manual', nome: 'documento-baixado-a-mao.PDF', pasta: pastaManual, md5: md5Arq(manual.pdf_path) });
 
   const r1 = await sincronizarDrive({ dbFile, log: () => {} });
   console.log(`       1ª execução: ${r1.enviados} enviado(s), ${r1.jaExistiam} já existia(m), ${r1.falhas} falha(s), ${r1.total} PDF(s)`);
   ok(r1.total > 0 && r1.falhas === 0, 'todos os PDFs conferidos sem falha');
-  ok(r1.jaExistiam >= antes && r1.enviados + r1.jaExistiam === r1.total, 'arquivo que já estava no Drive foi ignorado (não duplicou)');
-  const nomes = arquivos.map((a) => `${caminho(a.pasta)} / ${a.nome}`);
-  ok(new Set(nomes).size === nomes.length, 'nenhum arquivo duplicado na mesma pasta');
-  ok(nomes.some((n) => /AONet/i.test(n)) && nomes.some((n) => /Vero/i.test(n)), 'PDFs das outras operadoras (AONet, Vero) também foram');
-  ok(!nomes.some((n) => /^R\. Dorival|^AONET PME|^HERMINIO/i.test(n)), 'pastas usam o nome da empresa, não o endereço do contrato');
-
+  ok(!arquivos.some((a) => a.id !== 'manual' && a.md5 === md5Arq(manual.pdf_path)), 'PDF que já estava no Drive com OUTRO nome não foi reenviado');
+  const md5s = arquivos.map((a) => a.md5);
+  ok(new Set(md5s).size === md5s.length, 'nenhum conteúdo duplicado no Drive');
+  ok(arquivos.every((a) => /^(Janeiro|Fevereiro|Março|Abril|Maio|Junho|Julho|Agosto|Setembro|Outubro|Novembro|Dezembro) - \d{4}$/.test(nomePasta(a.pasta))), 'todos os arquivos em pastas "Mês - Ano"');
+  ok([...pastas.values()].every((p) => p.pai === null || p.pai === 'raiz'), 'pastas de mês direto na raiz (sem Empresa/CNPJ)');
+  const vero = contas.find((c) => /vero/i.test(c.produto || '') && c.boleto_pdf_path && fs.existsSync(c.boleto_pdf_path));
+  if (vero) {
+    const a = arquivos.find((x) => x.nome === path.basename(vero.boleto_pdf_path));
+    ok(a && nomePasta(a.pasta) === nomePastaMes(anoMes(vero)) && /^Outubro - 2026$/.test(nomePasta(a.pasta)), `pasta pelo mês do VENCIMENTO (Vero venc. ${vero.data_vencimento} -> ${a && nomePasta(a.pasta)})`);
+  }
   const qtd = arquivos.length;
   const r2 = await sincronizarDrive({ dbFile, log: () => {} });
   ok(r2.enviados === 0 && arquivos.length === qtd, '2ª execução: nada é reenviado');
 
-  console.log('\nExemplos de onde os arquivos ficaram:');
-  [...new Set(nomes)].filter((n, i, a) => i < 3 || /AONet|Vero/.test(n)).slice(0, 6).forEach((n) => console.log('   ' + n));
   fs.rmSync(config.paths.state, { recursive: true, force: true });
   console.log(falhas ? `\n${falhas} teste(s) falharam` : '\nTodos os testes passaram');
   process.exit(falhas ? 1 : 0);
