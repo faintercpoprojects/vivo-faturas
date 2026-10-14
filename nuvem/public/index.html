@@ -412,11 +412,15 @@ function preencherFiltros(){
   fill($('#cfSituacao'),unicos(c=>c.situacao).map(s=>[s,s]));
   fill($('#cfOperadora'),unicos(c=>opNome(c.produto)).map(s=>[s,s]));
   fill($('#cfFinanceiro'),unicos(financeiro).map(s=>[s,s]));
-  // Vencimento: meses (mais recente primeiro), por extenso, + "sem vencimento".
-  const meses=[...new Set(CONTAS.map(c=>(c.data_vencimento||'').slice(0,7)).filter(m=>/^\d{4}-\d{2}$/.test(m)))].sort().reverse();
-  const opVenc=meses.map(m=>[m,`${MESES_NOME[Number(m.slice(5))-1]} / ${m.slice(0,4)}`]);
-  if(CONTAS.some(c=>!c.data_vencimento)) opVenc.push(['sem','sem vencimento']);
-  fill($('#cfVenc'),opVenc);
+  // Vencimento: os 12 meses do ano (janeiro a dezembro), agrupados por ano —
+  // o ano atual primeiro, depois os anos anteriores que têm contas.
+  const selV=$('#cfVenc'), curV=selV.value;
+  const anoAtual=new Date().getFullYear();
+  const anos=[...new Set([anoAtual, ...CONTAS.map(c=>Number((c.data_vencimento||'').slice(0,4))).filter(a=>a>2000)])].sort((a,b)=>b-a);
+  selV.innerHTML='<option value="">Todos</option>'+anos.map(a=>`<optgroup label="${a}">`+
+    MESES_NOME.map((n,i)=>{const v=`${a}-${String(i+1).padStart(2,'0')}`;return `<option value="${v}">${n} / ${a}</option>`;}).join('')+'</optgroup>').join('')+
+    (CONTAS.some(c=>!c.data_vencimento)?'<option value="sem">sem vencimento</option>':'');
+  selV.value=[...selV.options].some(o=>o.value===curV)?curV:'';
 }
 
 function filtradas(){
