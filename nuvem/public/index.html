@@ -79,6 +79,10 @@
   th:hover{color:var(--muted)}
   th.ord::after{content:" ↑";color:var(--accent)} th.ord.desc::after{content:" ↓"}
   tr:last-child td{border-bottom:0}
+  /* linha de filtros por coluna */
+  .linha-filtro th{padding:6px 8px 10px;cursor:default;text-transform:none;letter-spacing:0;font-weight:400;background:var(--surface)}
+  .linha-filtro select,.linha-filtro input{width:100%;min-width:0;max-width:none;font-size:12.5px;padding:5px 8px;background:var(--bg)}
+  .linha-filtro .ativo{border-color:var(--accent);color:var(--text)}
   tbody tr:hover td{background:#171d25}
   td.r,th.r{text-align:right}
   .emp{max-width:300px;white-space:normal}
@@ -182,12 +186,7 @@
 
   <div class="filtros">
     <label class="busca"><svg class="ic"><use href="#i-busca"/></svg><input type="search" id="busca" placeholder="Buscar empresa, linha, nº da fatura…" aria-label="Buscar" /></label>
-    <select id="fMes" aria-label="Mês de vencimento"><option value="">Mês</option></select>
-    <select id="fSituacao" aria-label="Situação"><option value="">Situação</option></select>
-    <select id="fProduto" aria-label="Operadora"><option value="">Operadora</option><option value="Movel">Vivo Móvel</option><option value="Fixo">Vivo Fixo</option><option value="Desktop">Desktop</option><option value="AONet">AONet</option><option value="Vero">Vero</option></select>
-    <select id="fCompetencia" aria-label="Competência"><option value="">Competência</option></select>
-    <select id="fEmpresa" aria-label="Empresa"><option value="">Empresa</option></select>
-    <select id="fCnpj" aria-label="CNPJ"><option value="">CNPJ</option></select>
+    <button id="btnLimpar" class="fantasma hidden" title="Remover todos os filtros">Limpar filtros</button>
     <button id="btnAdd" title="Cadastrar uma nota manualmente"><svg class="ic"><use href="#i-mais"/></svg>Nova nota</button>
     <span class="contador num" id="contador"></span>
   </div>
@@ -203,6 +202,16 @@
         <th style="cursor:default">Documentos</th>
         <th data-k="status_interno">Financeiro</th>
         <th style="cursor:default"></th>
+      </tr>
+      <tr class="linha-filtro">
+        <th><select id="cfSituacao" aria-label="Filtrar situação"><option value="">Todas</option></select></th>
+        <th><select id="cfVenc" aria-label="Filtrar vencimento"><option value="">Todos</option></select></th>
+        <th><input id="cfEmpresa" type="search" placeholder="Empresa, CNPJ, linha…" aria-label="Filtrar empresa" /></th>
+        <th><select id="cfOperadora" aria-label="Filtrar operadora"><option value="">Todas</option></select></th>
+        <th><input id="cfValor" type="search" placeholder="ex.: 306" aria-label="Filtrar valor" inputmode="decimal" /></th>
+        <th><select id="cfDocs" aria-label="Filtrar documentos"><option value="">Todos</option><option value="fatura">Com fatura</option><option value="boleto">Com boleto</option><option value="nenhum">Sem PDF</option></select></th>
+        <th><select id="cfFinanceiro" aria-label="Filtrar financeiro"><option value="">Todos</option></select></th>
+        <th></th>
       </tr></thead>
       <tbody id="tbody"></tbody>
     </table>
@@ -386,35 +395,61 @@ function renderResumo(r){
     + `</div></div>`;
 }
 
+// ---- filtros por coluna (linha abaixo dos títulos da tabela)
+const MESES_NOME=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+const FILTROS=['#cfSituacao','#cfVenc','#cfEmpresa','#cfOperadora','#cfValor','#cfDocs','#cfFinanceiro'];
+const temFatura=c=>!!c.pdf_baixado, temBoleto=c=>!!(c.boleto_pdf_path||c.boleto_drive_link);
+const financeiro=c=>c.status_interno||'Em aberto';
+
 function preencherFiltros(){
-  const comp=[...new Set(CONTAS.map(c=>c.competencia).filter(Boolean))].sort((a,b)=>{const f=s=>s.split('/').reverse().join('');return f(b).localeCompare(f(a));});
-  const emp=[...new Set(CONTAS.map(c=>c.empresa).filter(Boolean))].sort();
-  const sit=[...new Set(CONTAS.map(c=>c.situacao).filter(Boolean))].sort();
-  const cnpj=[...new Set(CONTAS.map(c=>c.cnpj).filter(Boolean))].sort();
-  const fill=(sel,arr)=>{const cur=sel.value; sel.innerHTML=sel.options[0].outerHTML+arr.map(x=>`<option>${esc(x)}</option>`).join(''); sel.value=cur;};
-  fill($('#fCompetencia'),comp); fill($('#fEmpresa'),emp); fill($('#fSituacao'),sit); fill($('#fCnpj'),cnpj);
-  // Mês de vencimento (mais recente primeiro), escrito por extenso.
-  const meses=[...new Set(CONTAS.map(c=>(c.data_vencimento||'').slice(0,7)).filter(m=>/^d{4}-d{2}$/.test(m)))].sort().reverse();
-  const NOMES=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
-  const sel=$('#fMes'), cur=sel.value;
-  sel.innerHTML=sel.options[0].outerHTML+meses.map(m=>`<option value="${m}">${NOMES[Number(m.slice(5))-1]} / ${m.slice(0,4)}</option>`).join('');
-  sel.value=meses.includes(cur)?cur:'';
+  // Opções de cada coluna: valores que existem nas contas (o selecionado é mantido).
+  const fill=(sel,itens)=>{
+    const cur=sel.value;
+    sel.innerHTML=sel.options[0].outerHTML+itens.map(([v,t])=>`<option value="${esc(v)}">${esc(t)}</option>`).join('');
+    sel.value=itens.some(([v])=>v===cur)?cur:'';
+  };
+  const unicos=(fn)=>[...new Set(CONTAS.map(fn).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+  fill($('#cfSituacao'),unicos(c=>c.situacao).map(s=>[s,s]));
+  fill($('#cfOperadora'),unicos(c=>opNome(c.produto)).map(s=>[s,s]));
+  fill($('#cfFinanceiro'),unicos(financeiro).map(s=>[s,s]));
+  // Vencimento: meses (mais recente primeiro), por extenso, + "sem vencimento".
+  const meses=[...new Set(CONTAS.map(c=>(c.data_vencimento||'').slice(0,7)).filter(m=>/^\d{4}-\d{2}$/.test(m)))].sort().reverse();
+  const opVenc=meses.map(m=>[m,`${MESES_NOME[Number(m.slice(5))-1]} / ${m.slice(0,4)}`]);
+  if(CONTAS.some(c=>!c.data_vencimento)) opVenc.push(['sem','sem vencimento']);
+  fill($('#cfVenc'),opVenc);
 }
 
 function filtradas(){
   const q=$('#busca').value.trim().toLowerCase();
-  const fs=$('#fSituacao').value, fc=$('#fCompetencia').value, fe=$('#fEmpresa').value, fm=$('#fMes').value;
-  const fj=$('#fCnpj').value, fp=$('#fProduto').value;
+  const fSit=$('#cfSituacao').value, fVenc=$('#cfVenc').value, fOp=$('#cfOperadora').value;
+  const fDocs=$('#cfDocs').value, fFin=$('#cfFinanceiro').value;
+  const fEmp=$('#cfEmpresa').value.trim().toLowerCase();
+  const fVal=$('#cfValor').value.trim().replace(/[R$\s]/g,'');
+  const soDig=s=>String(s||'').replace(/\D/g,'');
+  // Marca os filtros em uso e mostra "Limpar filtros".
+  let algum=!!q;
+  for(const id of FILTROS){ const on=!!$(id).value.trim(); $(id).classList.toggle('ativo',on); algum=algum||on; }
+  $('#btnLimpar').classList.toggle('hidden',!algum);
   let rows = CONTAS.filter(c=>{
-    if(fm && !(c.data_vencimento||'').startsWith(fm)) return false;
-    if(fs && c.situacao!==fs) return false;
-    if(fc && c.competencia!==fc) return false;
-    if(fe && c.empresa!==fe) return false;
-    if(fj && c.cnpj!==fj) return false;
-    if(fp==='Fixo' && !/fixo/i.test(c.produto||'')) return false;
-    if(fp==='Movel' && !/mov/i.test(c.produto||'')) return false;
-    if(fp && !['Fixo','Movel'].includes(fp) && c.produto!==fp) return false;
-    if(q){ const hay=[c.empresa,c.numero_documento,c.linha,c.cnpj,opNome(c.produto)].join(' ').toLowerCase(); if(!hay.includes(q)) return false; }
+    if(fSit && c.situacao!==fSit) return false;
+    if(fVenc==='sem' ? !!c.data_vencimento : (fVenc && !(c.data_vencimento||'').startsWith(fVenc))) return false;
+    if(fOp && opNome(c.produto)!==fOp) return false;
+    if(fFin && financeiro(c)!==fFin) return false;
+    if(fDocs==='fatura' && !temFatura(c)) return false;
+    if(fDocs==='boleto' && !temBoleto(c)) return false;
+    if(fDocs==='nenhum' && (temFatura(c)||temBoleto(c))) return false;
+    if(fEmp){
+      const hay=[c.empresa,c.cnpj,c.linha,c.numero_documento,c.competencia].join(' ').toLowerCase();
+      // Também acha CNPJ/linha digitados sem pontuação.
+      if(!hay.includes(fEmp) && !(soDig(fEmp) && soDig(fEmp).length>=3 && soDig(hay).includes(soDig(fEmp)))) return false;
+    }
+    if(fVal){
+      // "306" acha R$ 306,46; "1.275,94" ou "1275.94" acham o valor exato.
+      const v=c.valor_original==null?'':Number(c.valor_original).toFixed(2);
+      const alvo=fVal.replace(/\.(?=\d{3}(\D|$))/g,'').replace(',','.');
+      if(!v.includes(alvo) && !v.replace('.',',').includes(fVal)) return false;
+    }
+    if(q){ const hay=[c.empresa,c.numero_documento,c.linha,c.cnpj,opNome(c.produto),c.situacao,financeiro(c)].join(' ').toLowerCase(); if(!hay.includes(q)) return false; }
     return true;
   });
   const {k,dir}=SORT;
@@ -465,7 +500,8 @@ function render(){
 document.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{
   const k=th.dataset.k; SORT.dir = SORT.k===k? -SORT.dir : 1; SORT.k=k; render();
 });
-['#busca','#fMes','#fSituacao','#fCompetencia','#fEmpresa','#fCnpj','#fProduto'].forEach(s=>$(s).addEventListener('input',render));
+['#busca',...FILTROS].forEach(s=>$(s).addEventListener('input',render));
+$('#btnLimpar').onclick=()=>{ $('#busca').value=''; FILTROS.forEach(s=>{ $(s).value=''; }); render(); };
 
 // modal de pagamento/baixa
 let editId=null;
