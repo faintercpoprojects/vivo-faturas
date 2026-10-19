@@ -378,6 +378,8 @@ async function carregar(){
     setTimeout(carregar, 5000);
   }
   // Versão online: avisa quando o computador que busca as contas está desligado.
+  // Envio ao Google Drive sem autorização (expira se o app do Google estiver em modo de teste).
+  if(st.driveOk===false){ box.classList.add('erro'); $('#status').textContent += ' · Drive sem autorização'; box.title='Os PDFs não estão indo para o Drive. No computador do escritório, rode: npm run google:token'; }
   if(st.agenteOnline===false){ box.classList.add('erro'); $('#status').textContent += ' · computador do escritório offline'; box.title='Os dados são da última sincronização. Novas buscas esperam o computador ligar.'; }
 }
 

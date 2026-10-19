@@ -244,6 +244,25 @@ let ultimoResultado = null; // { modo, inicio, fim, codigo, ok }
 const nuvem = require('../src/nuvem');
 const NUVEM = nuvem.ativo();
 
+// Coleta diária automática (COLETA_DIARIA=08:00 no .env; "false" desliga).
+// Com a nuvem ligada, vira um pedido "Agendamento 08:00" (aparece no
+// dashboard online como qualquer "Baixar contas"); sem nuvem, roda direto.
+const { criarAgendaDiaria } = require('../src/agendaDiaria');
+const HORA_DIARIA = process.env.COLETA_DIARIA || '08:00';
+const agenda = /^(false|0|nao|não)$/i.test(HORA_DIARIA) ? null : criarAgendaDiaria({
+  arquivoEstado: path.join(ROOT, '.state', 'coleta-diaria.json'),
+  hora: HORA_DIARIA,
+  log: console.log,
+  disparar: async () => {
+    if (NUVEM) {
+      try { return await nuvem.pedirColetaEEsperar('completo', `Agendamento ${HORA_DIARIA}`); }
+      catch (e) { console.error('Coleta diária: nuvem indisponível, rodando direto neste computador:', e.message); }
+    }
+    while (rodando) await new Promise((r) => setTimeout(r, 30000));
+    return new Promise((resolve) => { if (!iniciarColeta('completo', resolve)) resolve(-1); });
+  },
+});
+
 function iniciarColeta(modo, aoTerminar) {
   if (rodando) return false;
   modo = modo === 'status' ? 'status' : 'completo';
@@ -262,6 +281,7 @@ function iniciarColeta(modo, aoTerminar) {
   const driveLigado = process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID && !/^(false|0|nao|não)$/i.test(process.env.DRIVE_SYNC || '');
   if (modo === 'completo' && driveLigado) etapas.push(['scripts/sincronizar-drive.js']);
   let pior = 0;
+  let driveCodigo = null; // o Drive tem status próprio: falha nele não faz a coleta "falhar"
   const fim = (codigo) => {
     if (!rodando) return;
     ultimoResultado = { modo, inicio: inicioAtual, fim: new Date().toISOString(), codigo, ok: codigo === 0 || codigo === 1 };
@@ -269,8 +289,9 @@ function iniciarColeta(modo, aoTerminar) {
 `); fs.closeSync(out); } catch { /* ignore */ }
     rodando = false; modoAtual = null; inicioAtual = null;
     console.log(`Coleta (${modo}) finalizada — exit ${codigo}`);
+    if (agenda && modo === 'completo') agenda.registrarColetaCompleta(codigo === 0 || codigo === 1);
     const depois = NUVEM
-      ? nuvem.registrarColeta(codigo).then(() => nuvem.enviar({ log: console.log }))
+      ? nuvem.registrarColeta(codigo, driveCodigo).then(() => nuvem.enviar({ log: console.log }))
       : Promise.resolve();
     depois.catch((e) => console.error('Nuvem: falha ao enviar:', e.message))
       .finally(() => { if (aoTerminar) Promise.resolve(aoTerminar(codigo)).catch(() => {}); });
@@ -280,7 +301,11 @@ function iniciarColeta(modo, aoTerminar) {
     const child = spawn(process.execPath, etapas[i], {
       cwd: ROOT, detached: true, stdio: ['ignore', out, out], windowsHide: true,
     });
-    child.on('exit', (code) => { pior = Math.max(pior, code ?? 2); proxima(i + 1); });
+    child.on('exit', (code) => {
+      if (/sincronizar-drive/.test(etapas[i][0])) driveCodigo = code ?? 2;
+      else pior = Math.max(pior, code ?? 2);
+      proxima(i + 1);
+    });
     child.on('error', (e) => { console.error('Falha ao iniciar a coleta:', e.message); pior = 2; proxima(i + 1); });
     child.unref();
   };
@@ -356,5 +381,9 @@ app.listen(PORT, '0.0.0.0', () => {
       nuvem.iniciarAgente({ iniciarColeta, rodando: () => rodando, log: console.log });
       console.log('Nuvem: agente ativo (envia dados e atende os pedidos do dashboard online).');
     })();
+  }
+  if (agenda) {
+    agenda.iniciar();
+    console.log(`Coleta diária automática: todo dia às ${HORA_DIARIA} (ou assim que o computador ligar, se estava desligado).`);
   }
 });

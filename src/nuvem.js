@@ -134,12 +134,34 @@ async function criarAdmin({ usuario, nome, senhaHash }) {
              deve_trocar_senha = 0, sessao_versao = usuarios.sessao_versao + 1`, [usuario, nome, senhaHash, agora()]);
 }
 
+/**
+ * Cria um pedido de coleta na nuvem (como o botão "Baixar contas") e espera
+ * ele terminar. Se já houver um pedido em aberto, espera esse.
+ * @returns {Promise<number>} código de saída da coleta
+ */
+async function pedirColetaEEsperar(tipo, pedidoPor, { maxMs = 3 * 3600 * 1000, intervaloMs = 20000 } = {}) {
+  conectar();
+  let cmd = (await q('SELECT id FROM comandos WHERE fim_em IS NULL ORDER BY id DESC LIMIT 1'))[0];
+  if (!cmd) cmd = (await q('INSERT INTO comandos (tipo, pedido_por, criado_em) VALUES ($1,$2,$3) RETURNING id', [tipo, pedidoPor, agora()]))[0];
+  const fim = Date.now() + maxMs;
+  while (Date.now() < fim) {
+    await new Promise((r) => setTimeout(r, intervaloMs));
+    const c = (await q('SELECT fim_em, codigo FROM comandos WHERE id = $1', [cmd.id]))[0];
+    if (c && c.fim_em) return c.codigo == null ? -1 : Number(c.codigo);
+  }
+  return -1;
+}
+
 /** Registra o fim de uma coleta (para o "Atualizado em" do dashboard online). */
-async function registrarColeta(codigo) {
+async function registrarColeta(codigo, driveCodigo = null) {
   conectar();
   await q(`INSERT INTO agente (id, ultima_coleta_fim, ultima_coleta_ok) VALUES (1, $1, $2)
            ON CONFLICT (id) DO UPDATE SET ultima_coleta_fim = EXCLUDED.ultima_coleta_fim, ultima_coleta_ok = EXCLUDED.ultima_coleta_ok`,
     [agora(), codigo === 0 || codigo === 1 ? 1 : 0]);
+  // Status do envio ao Drive (só nas coletas completas, que é quando ele roda).
+  if (driveCodigo !== null) {
+    await q('UPDATE agente SET drive_ok = $1, drive_em = $2 WHERE id = 1', [driveCodigo === 0 || driveCodigo === 1 ? 1 : 0, agora()]);
+  }
 }
 
 /**
@@ -178,4 +200,4 @@ function iniciarAgente({ iniciarColeta, rodando, log = console.log, intervaloMs 
 
 async function fechar() { if (pool) await pool.end().catch(() => {}); pool = null; }
 
-module.exports = { ativo, usarBanco, esquema, enviar, migrarUsuarios, criarAdmin, registrarColeta, iniciarAgente, fechar };
+module.exports = { ativo, usarBanco, esquema, enviar, migrarUsuarios, criarAdmin, registrarColeta, pedirColetaEEsperar, iniciarAgente, fechar };

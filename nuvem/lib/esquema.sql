@@ -112,3 +112,7 @@ CREATE TABLE IF NOT EXISTS redefinicoes (
   criado_em  TEXT NOT NULL,
   ip         TEXT
 );
+
+-- Status do último envio ao Google Drive (0 = sem autorização/erro).
+ALTER TABLE agente ADD COLUMN IF NOT EXISTS drive_ok INTEGER;
+ALTER TABLE agente ADD COLUMN IF NOT EXISTS drive_em TEXT;

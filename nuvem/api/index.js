@@ -297,6 +297,7 @@ module.exports = async function handler(req, res) {
         agenteOnline: online,
         ultima: ag && (ag.ultima_coleta_fim || ag.ultima_sincronia) ? { fim: ag.ultima_coleta_fim || ag.ultima_sincronia } : null,
         resultado: ag && ag.ultima_coleta_ok === 0 ? { ok: false } : null,
+        driveOk: ag ? ag.drive_ok !== 0 : true,
       });
     }
     if (rota === 'config' && metodo === 'GET') return json(res, 200, { driveFolderUrl: process.env.DRIVE_FOLDER_URL || '' });
