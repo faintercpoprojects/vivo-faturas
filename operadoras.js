@@ -25,17 +25,26 @@ const valor = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : 
 
 async function main() {
   const operadoras = (process.env.OPERADORAS || 'desktop,aonet,vero').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-  const cnpjs = (valor('--cnpj') || process.env.OPERADORAS_CNPJS || '68.165.786/0001-30')
-    .split(',').map(soDigitos).filter((c) => c.length === 11 || c.length === 14);
+  // Empresas de cada operadora: o cadastro de acessos (node scripts/credenciais.js);
+  // na 1ª vez ele importa o OPERADORAS_CNPJS / VERO_* do .env. --cnpj força um só.
+  const credenciais = require('./src/credenciais');
+  credenciais.importarDoEnv();
+  const legado = (process.env.OPERADORAS_CNPJS || '68.165.786/0001-30').split(',').map(soDigitos).filter((c) => c.length === 11 || c.length === 14);
+  const forcado = valor('--cnpj') ? [soDigitos(valor('--cnpj'))] : null;
+  const pares = [];
+  for (const op of operadoras) {
+    const lista = forcado || credenciais.cnpjsDe(op);
+    for (const cnpj of (lista.length ? lista : legado)) pares.push([op, cnpj]);
+  }
 
-  logger.info(`===== Outras operadoras: ${operadoras.join(', ')} | CNPJ(s): ${cnpjs.map(fmtCnpj).join(', ')} =====`);
+  logger.info(`===== Outras operadoras: ${operadoras.map((op) => `${op} (${pares.filter((p) => p[0] === op).map((p) => fmtCnpj(p[1])).join(', ')})`).join(' | ')} =====`);
   db.abrir();
   const { browser, context } = await abrirNavegador();
   let erros = 0, novas = 0, atualizadas = 0, pdfs = 0;
 
   try {
-    for (const cnpj of cnpjs) {
-      for (const op of operadoras) {
+    for (const [op, cnpj] of pares) {
+      {
         const coletar = COLETORES[op];
         if (!coletar) { logger.warn(`Operadora desconhecida: ${op} (use: ${Object.keys(COLETORES).join(', ')})`); continue; }
         const inicio = Date.now();

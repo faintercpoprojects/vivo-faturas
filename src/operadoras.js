@@ -193,17 +193,19 @@ async function coletarAonet(context, cnpj, pastaBase) {
 const VERO_API = 'https://verointernet.com.br/cypher';
 
 async function coletarVero(_context, cnpj, pastaBase) {
-  const usuario = soDigitos(process.env.VERO_USUARIO);
-  const senha = process.env.VERO_SENHA || '';
-  if (!usuario || !senha) throw new Error('Vero: preencha VERO_USUARIO e VERO_SENHA no .env');
-  if (usuario !== soDigitos(cnpj)) return []; // o login da Vero é de outro documento
+  // Login da empresa no cadastro de acessos (scripts/credenciais.js); o
+  // VERO_USUARIO/VERO_SENHA do .env continua valendo como reserva.
+  const cad = require('./credenciais').acesso('vero', cnpj);
+  const usuario = soDigitos(cad ? cad.usuario : (soDigitos(process.env.VERO_USUARIO) === soDigitos(cnpj) ? process.env.VERO_USUARIO : ''));
+  const senha = cad ? cad.senha : (process.env.VERO_SENHA || '');
+  if (!usuario || !senha) throw new Error(`Vero: sem login cadastrado para ${fmtCnpj(cnpj)} (node scripts/credenciais.js adicionar vero ${soDigitos(cnpj)})`);
 
   const auth = await fetch(`${VERO_API}/auth/authenticate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ username: usuario, password: senha }),
   });
-  if (auth.status === 401) throw new Error('Vero: usuário e/ou senha inválidos (confira VERO_USUARIO/VERO_SENHA no .env)');
+  if (auth.status === 401) throw new Error(`Vero: login recusado para ${fmtCnpj(cnpj)} (confira com: node scripts/credenciais.js adicionar vero ${soDigitos(cnpj)})`);
   if (!auth.ok) throw new Error(`Vero: falha no login (HTTP ${auth.status})`);
   const { access_token: token } = await auth.json();
   const hdr = (crm) => ({ Authorization: `Bearer ${token}`, CRM: crm || 'todos', Accept: 'application/json' });
