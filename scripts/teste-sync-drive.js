@@ -60,6 +60,10 @@ const nomePasta = (id) => pastas.get(id).nome;
     const a = arquivos.find((x) => x.nome === path.basename(vero.boleto_pdf_path));
     ok(a && nomePasta(a.pasta) === nomePastaMes(anoMes(vero)) && /^Outubro - 2026$/.test(nomePasta(a.pasta)), `pasta pelo mês do VENCIMENTO (Vero venc. ${vero.data_vencimento} -> ${a && nomePasta(a.pasta)})`);
   }
+  const ambos = contas.filter((c) => c.pdf_path && c.boleto_pdf_path && fs.existsSync(c.pdf_path) && fs.existsSync(c.boleto_pdf_path));
+  const md5Sub = new Set(arquivos.map((a) => a.md5));
+  ok(ambos.length > 0 && ambos.every((c) => !md5Sub.has(md5Arq(c.pdf_path)) || c.pdf_path === manual.pdf_path), `conta com boleto e fatura: só o boleto vai para o Drive (${ambos.length} contas)`);
+
   const qtd = arquivos.length;
   const r2 = await sincronizarDrive({ dbFile, log: () => {} });
   ok(r2.enviados === 0 && arquivos.length === qtd, '2ª execução: nada é reenviado');

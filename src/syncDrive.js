@@ -42,6 +42,13 @@ function anoMes(c) {
   return { ano: new Date().getFullYear(), mes: new Date().getMonth() + 1 };
 }
 
+/** O documento que vai para o Drive: o boleto; sem boleto, a fatura. */
+function documentoDaConta(c) {
+  if (c.boleto_pdf_path && fs.existsSync(c.boleto_pdf_path)) return c.boleto_pdf_path;
+  if (c.pdf_path && fs.existsSync(c.pdf_path)) return c.pdf_path;
+  return null;
+}
+
 /** Nome da pasta do mês, no padrão do financeiro: "Outubro - 2026". */
 const nomePastaMes = ({ ano, mes }) => `${MESES[mes]} - ${ano}`;
 
@@ -86,8 +93,10 @@ async function sincronizarDrive({ dbFile, log = (m) => logger.info(m) } = {}) {
   let enviados = 0, jaExistiam = 0, falhas = 0, total = 0;
 
   for (const c of contas) {
-    for (const arq of [c.pdf_path, c.boleto_pdf_path]) {
-      if (!arq || !fs.existsSync(arq)) continue;
+    // Um documento por conta: o BOLETO; a fatura só quando não há boleto
+    // (evita "duplicidade" de boleto + fatura da mesma conta na pasta).
+    for (const arq of [documentoDaConta(c)]) {
+      if (!arq) continue;
       total++;
       const hash = await md5(arq);
       if (registro[hash]) { jaExistiam++; continue; }   // já tratado antes (registro local)
@@ -125,4 +134,4 @@ async function sincronizarDrive({ dbFile, log = (m) => logger.info(m) } = {}) {
   return { enviados, jaExistiam, falhas, total };
 }
 
-module.exports = { sincronizarDrive, anoMes, nomePastaMes, md5sNoDrive, lerRegistro, gravarRegistro };
+module.exports = { sincronizarDrive, anoMes, nomePastaMes, documentoDaConta, md5sNoDrive, lerRegistro, gravarRegistro };
