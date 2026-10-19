@@ -35,7 +35,8 @@ function situacao(c) {
 }
 function relevante(c) {
   if ((c.origem || '') === 'manual') return true;
-  return /pag|pronta|pendente|atrasad|vencid/.test((c.status_portal || '').toLowerCase());
+  // "desconhecido" = rótulo do portal não reconhecido: mostra mesmo assim.
+  return /pag|pronta|pendente|atrasad|vencid|desconhecido/.test((c.status_portal || '').toLowerCase());
 }
 const EDITAVEIS = ['status_interno', 'valor_pago', 'data_pagamento', 'data_baixa', 'forma_pagamento', 'banco_conta', 'comprovante', 'observacoes'];
 

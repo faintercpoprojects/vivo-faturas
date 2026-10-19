@@ -15,7 +15,8 @@
  *
  * Roda dentro de page.evaluate (sem dependências externas).
  */
-function lerCardsFixoNaPagina() {
+function lerCardsFixoNaPagina(opcoes) {
+  const comTextos = !!(opcoes && opcoes.textos); // diagnóstico: devolve os textos brutos do card
   const MESES = { jan: 1, fev: 2, mar: 3, abr: 4, mai: 5, jun: 6, jul: 7, ago: 8, set: 9, out: 10, nov: 11, dez: 12 };
   const textos = [];
   const visitar = (raiz) => {
@@ -54,22 +55,29 @@ function lerCardsFixoNaPagina() {
       const prox = dentro.slice(i2 + 1).find((o) => o.y > dentro[i2].y + 5);
       return prox ? prox.t : null;
     })();
-    // Status: rótulo curto do card (Paga / A vencer / Vencida / Atrasada / Pronta pra pagar / Em aberto...).
-    const rot = dentro.map((o) => o.t).find((t) => /^(paga|pago|quitad[ao]|liquidad[ao]|a vencer|vencid[ao]|atrasad[ao]|em atraso|pronta? pr?a pagar|em aberto|aberta|pendente|pagar at[eé].*|em processamento|processando)$/i.test(t)) || null;
+    // Status: rótulo curto do card. Exemplos vistos no portal:
+    //   "Paga" + "set/2026"                      (paga: mostra o mês)
+    //   "Atrasada desde" + "15/10/2026"          (em atraso: mostra o vencimento)
+    // e variações como "Vence em", "A vencer", "Pagar até", "Pronta pra pagar".
+    const rot = dentro.map((o) => o.t).find((t) => t.length <= 40 &&
+      /^(paga|pago|quitad|liquidad|atrasad|vencid|em atraso|vence|a vencer|pagar at|pronta? pr?a pagar|em aberto|aberta|pendente|em processamento|processando)/i.test(t)) || null;
     const st = (rot || '').toLowerCase();
-    const paga = /^(paga|pago|quitad|liquidad)/.test(st);
+    const paga = /^(paga|pago|quitad|liquidad)/.test(st) && !/pagar/.test(st);
     const status = paga ? 'Paga' : /vencid|atrasad|atraso/.test(st) ? 'Atrasada' : rot ? 'Pendente' : 'desconhecido';
     cards.push({
       y: tit.y - window.scrollY,
       valor,
-      mes: mesAno ? MESES[mesAno[1].toLowerCase().slice(0, 3)] : null,
-      ano: mesAno ? Number(mesAno[2]) : null,
+      // Mês/ano: o do card ("set/2026"); se o card traz a data completa
+      // ("Atrasada desde 15/10/2026"), usa o mês dessa data.
+      mes: mesAno ? MESES[mesAno[1].toLowerCase().slice(0, 3)] : dataCompleta ? Number(dataCompleta.slice(3, 5)) : null,
+      ano: mesAno ? Number(mesAno[2]) : dataCompleta ? Number(dataCompleta.slice(6)) : null,
       vencimento: dataCompleta, // o layout novo normalmente não traz; mantido se aparecer
       codigoCliente: codigo,
       endereco,
       rotuloStatus: rot,
       status,
       paga,
+      ...(comTextos ? { textos: dentro.map((o) => o.t) } : {}),
     });
   });
   return cards.filter((c) => c.valor);

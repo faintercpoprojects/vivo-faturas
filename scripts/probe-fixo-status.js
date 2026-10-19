@@ -26,12 +26,12 @@ const alvo = (() => { const i = process.argv.indexOf('--cnpj'); return i > 0 ? p
     const paginas = [];
     do {
       await page.waitForTimeout(2500);
-      paginas.push(await page.evaluate(lerCardsFixoNaPagina));
+      paginas.push(await page.evaluate(lerCardsFixoNaPagina, { textos: process.argv.includes('--textos') }));
     } while (paginas.length < 6 && (await irProximaPagina(page)));
     fs.writeFileSync(path.join(config.paths.logs, 'probe-fixo-status.json'), JSON.stringify(paginas, null, 2));
     paginas.forEach((p, i) => {
       console.log(`--- página ${i + 1}: ${p.length} card(s)`);
-      for (const c of p) console.log(`  R$ ${c.valor} | ${c.mes}/${c.ano} | status: ${c.rotuloStatus} -> ${c.status} | cliente ${c.codigoCliente} | ${c.endereco}`);
+      for (const c of p) { console.log(`  R$ ${c.valor} | ${c.mes}/${c.ano} | status: ${c.rotuloStatus} -> ${c.status} | cliente ${c.codigoCliente} | ${c.endereco}`); if (c.textos) console.log('     textos:', JSON.stringify(c.textos)); }
     });
   } finally {
     await browser.close().catch(() => {});

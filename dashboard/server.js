@@ -60,7 +60,9 @@ function situacao(c) {
 function relevante(c) {
   if ((c.origem || '') === 'manual') return true;
   const s = (c.status_portal || '').toLowerCase();
-  return /pag|pronta|pendente|atrasad|vencid/.test(s);
+  // "desconhecido" = o robô não reconheceu o rótulo do portal: mostra mesmo
+  // assim (pela data de vencimento), para nenhuma conta sumir em silêncio.
+  return /pag|pronta|pendente|atrasad|vencid|desconhecido/.test(s);
 }
 
 const app = express();
