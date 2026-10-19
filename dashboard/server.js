@@ -254,6 +254,12 @@ const agenda = /^(false|0|nao|não)$/i.test(HORA_DIARIA) ? null : criarAgendaDia
   hora: HORA_DIARIA,
   log: console.log,
   disparar: async () => {
+    // Já há uma coleta rodando (ex.: alguém clicou "Baixar contas"): espera ela
+    // e, se foi completa e deu certo, vale como a do dia — não pede outra.
+    if (rodando) {
+      while (rodando) await new Promise((r) => setTimeout(r, 15000));
+      if (agenda.concluidaHoje()) return 0;
+    }
     if (NUVEM) {
       try { return await nuvem.pedirColetaEEsperar('completo', `Agendamento ${HORA_DIARIA}`); }
       catch (e) { console.error('Coleta diária: nuvem indisponível, rodando direto neste computador:', e.message); }
@@ -363,10 +369,12 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`  local ...... http://localhost:${PORT}`);
   for (const ip of ipsLocais()) console.log(`  na rede .... http://${ip}:${PORT}`);
   console.log(`Banco: ${DB_FILE}`);
-  // Ao subir o servidor, já sincroniza com o Vivo Empresas (baixa os PDFs e
-  // atualiza o status). Desligue com AUTO_SYNC=false; AUTO_SYNC_MODO=status
-  // faz só a leitura rápida de status.
-  if (!/^(false|0|nao|não)$/i.test(process.env.AUTO_SYNC || '')) {
+  // Sincronizar ao subir o servidor: com a coleta diária ligada isso já é feito
+  // por ela (se o computador ligar depois das 8h, ela roda na hora), então só
+  // acontece se AUTO_SYNC=true no .env. Sem coleta diária, continua como antes
+  // (AUTO_SYNC=false desliga; AUTO_SYNC_MODO=status faz só a leitura rápida).
+  const autoSync = process.env.AUTO_SYNC || (agenda ? 'false' : 'true');
+  if (!/^(false|0|nao|não)$/i.test(autoSync)) {
     iniciarColeta(process.env.AUTO_SYNC_MODO || 'completo');
   }
   if (NUVEM) {

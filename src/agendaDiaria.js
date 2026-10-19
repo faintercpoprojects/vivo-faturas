@@ -68,7 +68,10 @@ function criarAgendaDiaria({ arquivoEstado, hora = '08:00', disparar, log = cons
     }
   }
 
-  return { tick, registrarColetaCompleta, iniciar: (ms = 60 * 1000) => { setTimeout(tick, 15000); return setInterval(tick, ms); } };
+  /** Já houve coleta completa bem-sucedida hoje (depois do horário)? */
+  function concluidaHoje() { const e = ler(); return e.dia === diaLocal(agora()) && !!e.ok; }
+
+  return { tick, registrarColetaCompleta, concluidaHoje, iniciar: (ms = 60 * 1000) => { setTimeout(tick, 15000); return setInterval(tick, ms); } };
 }
 
 module.exports = { criarAgendaDiaria };
