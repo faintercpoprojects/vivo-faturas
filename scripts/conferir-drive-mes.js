@@ -41,7 +41,7 @@ const digitos = (s) => (String(s || '').match(/\d{8,}/g) || []);
   const naPasta = [];
   let pageToken;
   do {
-    const r = await d.files.list({ q: `'${pastaId}' in parents and trashed=false`, fields: 'nextPageToken, files(id,name,mimeType,md5Checksum)', pageSize: 200, pageToken });
+    const r = await d.files.list({ q: `'${pastaId}' in parents and trashed=false`, fields: 'nextPageToken, files(id,name,mimeType,md5Checksum,createdTime)', pageSize: 200, pageToken });
     naPasta.push(...r.data.files.filter((f) => f.mimeType !== PASTA));
     pageToken = r.data.nextPageToken;
   } while (pageToken);
@@ -57,14 +57,36 @@ const digitos = (s) => (String(s || '').match(/\d{8,}/g) || []);
       fatura: c.pdf_path && fs.existsSync(c.pdf_path) ? { arq: c.pdf_path, md5: await md5(c.pdf_path) } : null,
     };
     const chaves = new Set([...digitos(c.linha), ...digitos(c.numero_documento)].map((x) => x.replace(/^0+/, '')));
-    // Arquivos da pasta que são desta conta (pelo conteúdo ou pelo nº no nome).
+    // Arquivos da pasta que são desta conta: pelo conteúdo, pelo nome que a
+    // automação usa (o PDF pode ser baixado de novo e mudar os bytes) ou pelo
+    // nº da linha/documento no nome.
+    const nomesLocais = new Set([docs.boleto, docs.fatura].filter(Boolean).map((x) => path.basename(x.arq).toLowerCase()));
     const meus = naPasta.filter((f) =>
       (docs.boleto && f.md5Checksum === docs.boleto.md5) || (docs.fatura && f.md5Checksum === docs.fatura.md5) ||
+      nomesLocais.has(f.name.toLowerCase()) ||
       digitos(f.name).some((x) => chaves.has(x.replace(/^0+/, ''))));
-    const tipo = (f) => (docs.boleto && f.md5Checksum === docs.boleto.md5 ? 'boleto' : docs.fatura && f.md5Checksum === docs.fatura.md5 ? 'fatura' : tipoPorNome(f.name));
-    const boletos = meus.filter((f) => tipo(f) === 'boleto');
-    const faturas = meus.filter((f) => tipo(f) === 'fatura');
+    const tipo = (f) => (docs.boleto && f.md5Checksum === docs.boleto.md5 ? 'boleto' : docs.fatura && f.md5Checksum === docs.fatura.md5 ? 'fatura'
+      : docs.boleto && f.name.toLowerCase() === path.basename(docs.boleto.arq).toLowerCase() ? 'boleto'
+        : docs.fatura && f.name.toLowerCase() === path.basename(docs.fatura.arq).toLowerCase() ? 'fatura' : tipoPorNome(f.name));
     const rotulo = `${(c.produto || '').padEnd(7)} ${c.linha || c.numero_documento || '-'} venc ${c.data_vencimento} R$ ${c.valor_original}`;
+
+    // Cópias idênticas (mesmo conteúdo) da mesma conta: fica uma só — a que
+    // segue o padrão de nome do financeiro (não o nome gerado pela automação).
+    const doRobo = (f) => nomesLocais.has(f.name.toLowerCase());
+    const porConteudo = new Map();
+    for (const f of meus) (porConteudo.get(f.md5Checksum) || porConteudo.set(f.md5Checksum, []).get(f.md5Checksum)).push(f);
+    const removidos = new Set();
+    for (const grupo of porConteudo.values()) {
+      if (grupo.length < 2) continue;
+      const ordem = [...grupo].sort((a, b) => Number(doRobo(a)) - Number(doRobo(b)) || String(a.createdTime || '').localeCompare(String(b.createdTime || '')));
+      for (const f of ordem.slice(1)) {
+        removidos.add(f.id); plano.push({ acao: 'lixeira', f });
+        relatorio.push(`  🗑 ${rotulo}: cópia idêntica "${f.name}" vai para a LIXEIRA (fica "${ordem[0].name}")`);
+      }
+    }
+    const restantes = meus.filter((f) => !removidos.has(f.id));
+    const boletos = restantes.filter((f) => tipo(f) === 'boleto');
+    const faturas = restantes.filter((f) => tipo(f) === 'fatura');
 
     const principal = documentoDaConta(c);
     if (!meus.length) {
@@ -86,7 +108,7 @@ const digitos = (s) => (String(s || '').match(/\d{8,}/g) || []);
       relatorio.push(`  ↑ ${rotulo}: só havia a fatura — SUBIR o boleto e mandar a fatura para a LIXEIRA`);
       continue;
     }
-    relatorio.push(`  ✓ ${rotulo}: ok (${meus.map((f) => f.name).join(', ')})`);
+    relatorio.push(`  ✓ ${rotulo}: ok (${restantes.map((f) => f.name).join(', ')})`);
   }
 
   console.log(`Pasta "${nomePasta}": ${naPasta.length} arquivo(s) | contas com vencimento em ${MES}: ${contas.length}\n`);
